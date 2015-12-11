@@ -1,3 +1,6 @@
 [submodule "MultilinearReconstruction"]
 	path = MultilinearReconstruction
 	url = https://github.com/phg1024/MultilinearReconstruction.git
+[submodule "Catch"]
+	path = Catch
+	url = https://github.com/philsquared/Catch.git
