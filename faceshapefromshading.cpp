@@ -8,7 +8,10 @@
 #include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
 #include <QOffscreenSurface>
+#include <QFile>
+
 #include <GL/freeglut_std.h>
+#include <boost/timer/timer.hpp>
 
 #include "common.h"
 #include "glm/glm.hpp"
@@ -34,6 +37,8 @@ int main(int argc, char **argv) {
   const string template_mesh_filename("/home/phg/Data/Multilinear/template.obj");
   const string contour_points_filename("/home/phg/Data/Multilinear/contourpoints.txt");
   const string landmarks_filename("/home/phg/Data/Multilinear/landmarks_73.txt");
+  const string albedo_index_map_filename("/home/phg/Data/Multilinear/albedo_index.png");
+  const string albedo_pixel_map_filename("/home/phg/Data/Multilinear/albedo_pixel.png");
 
   BasicMesh mesh(template_mesh_filename);
 
@@ -47,12 +52,19 @@ int main(int argc, char **argv) {
 
   auto decode_index = [](unsigned char r, unsigned char g, unsigned char b, int& idx) {
     idx = b; idx <<= 8; idx |= g; idx <<= 8; idx |= r;
+    return idx;
   };
 
   // Generate index map for albedo
-  PhGUtils::message("generate index map for albedo.");
+  bool generate_index_map = false;
   QImage albedo_index_map;
-  {
+  if(QFile::exists(albedo_index_map_filename.c_str()) && (!generate_index_map)) {
+    PhGUtils::message("loading index map for albedo.");
+    albedo_index_map = QImage(albedo_index_map_filename.c_str());
+    albedo_index_map.save("albedo_index.png");
+  } else {
+    PhGUtils::message("generating index map for albedo.");
+    boost::timer::auto_cpu_timer t("index map for albedo generation time = %w seconds.\n");
     QSurfaceFormat format;
     format.setMajorVersion(3);
     format.setMinorVersion(3);
@@ -80,7 +92,12 @@ int main(int argc, char **argv) {
     // draw the triangles
 
     // setup OpenGL viewing
+#define DEBUG_GEN 0   // Change this to 1 to generate albedo pixel map
+#if DEBUG_GEN
+    glShadeModel(GL_SMOOTH);
+#else
     glShadeModel(GL_FLAT);
+#endif
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
 
@@ -103,11 +120,23 @@ int main(int argc, char **argv) {
       auto t0 = mesh.texture_coords(f[0]), t1 = mesh.texture_coords(f[1]), t2 = mesh.texture_coords(f[2]);
       unsigned char r, g, b;
       encode_index(face_i, r, g, b);
+      int tmp_idx;
+      assert(decode_index(r, g, b, tmp_idx) == face_i);
       glBegin(GL_TRIANGLES);
+
+#if DEBUG_GEN
+      glColor3f(1, 0, 0);
+      glVertex2f(t0[0], t0[1]);
+      glColor3f(0, 1, 0);
+      glVertex2f(t1[0], t1[1]);
+      glColor3f(0, 0, 1);
+      glVertex2f(t2[0], t2[1]);
+#else
       glColor4ub(r, g, b, 255);
       glVertex2f(t0[0], t0[1]);
       glVertex2f(t1[0], t1[1]);
       glVertex2f(t2[0], t2[1]);
+#endif
       glEnd();
     }
     PhGUtils::message("done.");
@@ -115,7 +144,7 @@ int main(int argc, char **argv) {
     // get the bitmap and save it as an image
     QImage img = fbo.toImage();
     fbo.release();
-    img.save("texture_map.png");
+    img.save("albedo_index.png");
     albedo_index_map = img;
   }
 
@@ -123,33 +152,71 @@ int main(int argc, char **argv) {
   vector<vector<PixelInfo>> albedo_pixel_map(tex_size, vector<PixelInfo>(tex_size));
 
   // Generate pixel map for albedo
-  PhGUtils::message("generating pixel map for albedo ...");
-  for(int i=0;i<tex_size;++i) {
-    for(int j=0;j<tex_size;++j) {
-      double y = i / static_cast<double>(tex_size - 1);
-      double x = j / static_cast<double>(tex_size - 1);
+  bool gen_pixel_map = false;
+  QImage pixel_map_image;
+  if(QFile::exists(albedo_pixel_map_filename.c_str()) && (!gen_pixel_map)) {
+    pixel_map_image = QImage(albedo_pixel_map_filename.c_str());
 
-      QRgb pix = albedo_index_map.pixel(j, i);
-      unsigned char r = static_cast<unsigned char>(qRed(pix));
-      unsigned char g = static_cast<unsigned char>(qGreen(pix));
-      unsigned char b = static_cast<unsigned char>(qBlue(pix));
-      int fidx;
-      decode_index(r, g, b, fidx);
+    PhGUtils::message("generating pixel map for albedo ...");
+    boost::timer::auto_cpu_timer t("pixel map for albedo generation time = %w seconds.\n");
 
-      auto f = mesh.face_texture(fidx);
-      auto t0 = mesh.texture_coords(f[0]), t1 = mesh.texture_coords(f[1]), t2 = mesh.texture_coords(f[2]);
+    for(int i=0;i<tex_size;++i) {
+      for(int j=0;j<tex_size;++j) {
+        QRgb pix = albedo_index_map.pixel(j, i);
+        unsigned char r = static_cast<unsigned char>(qRed(pix));
+        unsigned char g = static_cast<unsigned char>(qGreen(pix));
+        unsigned char b = static_cast<unsigned char>(qBlue(pix));
+        if(r == 0 && g == 0 && b == 0) continue;
+        int fidx;
+        decode_index(r, g, b, fidx);
 
-      using PhGUtils::Point3f;
-      using PhGUtils::Point2d;
-      Point3f bcoords;
-      // Compute barycentric coordinates
-      PhGUtils::computeBarycentricCoordinates(Point2d(x, y),
-                                              Point2d(t0[0], t0[1]), Point2d(t1[0], t1[1]), Point2d(t2[0], t2[1]),
-                                              bcoords);
-      albedo_pixel_map[i][j] = PixelInfo(fidx, glm::vec3(bcoords.x, bcoords.y, bcoords.z));
+        QRgb bcoords_pix = pixel_map_image.pixel(j, i);
+
+        float x = static_cast<float>(qRed(bcoords_pix)) / 255.0f;
+        float y = static_cast<float>(qGreen(bcoords_pix)) / 255.0f;
+        float z = static_cast<float>(qBlue(bcoords_pix)) / 255.0f;
+        albedo_pixel_map[i][j] = PixelInfo(fidx, glm::vec3(x, y, z));
+      }
     }
+    PhGUtils::message("done.");
+  } else {
+    pixel_map_image = QImage(tex_size, tex_size, QImage::Format_ARGB32);
+    pixel_map_image.fill(0);
+    PhGUtils::message("generating pixel map for albedo ...");
+    boost::timer::auto_cpu_timer t("pixel map for albedo generation time = %w seconds.\n");
+
+    for(int i=0;i<tex_size;++i) {
+      for(int j=0;j<tex_size;++j) {
+        double y = 1.0 - (i + 0.5) / static_cast<double>(tex_size);
+        double x = (j + 0.5) / static_cast<double>(tex_size);
+
+        QRgb pix = albedo_index_map.pixel(j, i);
+        unsigned char r = static_cast<unsigned char>(qRed(pix));
+        unsigned char g = static_cast<unsigned char>(qGreen(pix));
+        unsigned char b = static_cast<unsigned char>(qBlue(pix));
+        if(r == 0 && g == 0 && b == 0) continue;
+        int fidx;
+        decode_index(r, g, b, fidx);
+
+        auto f = mesh.face_texture(fidx);
+        auto t0 = mesh.texture_coords(f[0]), t1 = mesh.texture_coords(f[1]), t2 = mesh.texture_coords(f[2]);
+
+        using PhGUtils::Point3f;
+        using PhGUtils::Point2d;
+        Point3f bcoords;
+        // Compute barycentric coordinates
+        PhGUtils::computeBarycentricCoordinates(Point2d(x, y),
+                                                Point2d(t0[0], t0[1]), Point2d(t1[0], t1[1]), Point2d(t2[0], t2[1]),
+                                                bcoords);
+        //cerr << bcoords << endl;
+        albedo_pixel_map[i][j] = PixelInfo(fidx, glm::vec3(bcoords.x, bcoords.y, bcoords.z));
+
+        pixel_map_image.setPixel(j, i, qRgb(bcoords.x*255, bcoords.y*255, bcoords.z*255));
+      }
+      pixel_map_image.save("albedo_pixel.jpg");
+    }
+    PhGUtils::message("done.");
   }
-  PhGUtils::message("done.");
 
   // Collect texture information from each input (image, mesh) pair
 
