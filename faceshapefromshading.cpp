@@ -15,7 +15,16 @@
 
 #include "common.h"
 #include "glm/glm.hpp"
-#include "MultilinearReconstruction/basicmesh.h"
+
+#include <MultilinearReconstruction/basicmesh.h>
+#include <MultilinearReconstruction/ioutilities.h>
+#include <MultilinearReconstruction/multilinearmodel.h>
+#include <MultilinearReconstruction/parameters.h>
+
+#include "boost/filesystem/operations.hpp"
+#include "boost/filesystem/path.hpp"
+
+namespace fs = boost::filesystem;
 
 struct PixelInfo {
   PixelInfo() : fidx(-1) {}
@@ -23,6 +32,15 @@ struct PixelInfo {
 
   int fidx;           // trinagle index
   glm::vec3 bcoords;  // bary centric coordinates
+};
+
+struct ImageBundle {
+  ImageBundle() {}
+  ImageBundle(const QImage& image, const vector<Constraint2D>& points, const ReconstructionResult& params)
+    : image(image), points(points), params(params) {}
+  QImage image;
+  vector<Constraint2D> points;
+  ReconstructionResult params;
 };
 
 int main(int argc, char **argv) {
@@ -41,6 +59,8 @@ int main(int argc, char **argv) {
   const string albedo_pixel_map_filename("/home/phg/Data/Multilinear/albedo_pixel.png");
 
   BasicMesh mesh(template_mesh_filename);
+  auto landmarks = LoadIndices(landmarks_filename);
+  auto contour_indices = LoadContourIndices(contour_points_filename);
 
   const int tex_size = 2048;
 
@@ -218,7 +238,40 @@ int main(int argc, char **argv) {
     PhGUtils::message("done.");
   }
 
-  // Collect texture information from each input (image, mesh) pair
+  const string settings_filename(argv[1]);
+
+  // Parse the setting file and load image related resources
+  fs::path settings_filepath(settings_filename);
+
+  vector<pair<string, string>> image_points_filenames = ParseSettingsFile(settings_filename);
+  vector<ImageBundle> image_bundles;
+  for(auto& p : image_points_filenames) {
+    fs::path image_filename = settings_filepath.parent_path() / fs::path(p.first);
+    fs::path pts_filename = settings_filepath.parent_path() / fs::path(p.second);
+    fs::path res_filename = settings_filepath.parent_path() / fs::path(p.first + ".res");
+    cout << "[" << image_filename << ", " << pts_filename << "]" << endl;
+
+    auto image_points_pair = LoadImageAndPoints(image_filename.string(), pts_filename.string());
+    auto recon_results = LoadReconstructionResult(res_filename.string());
+    image_bundles.push_back(ImageBundle(image_points_pair.first, image_points_pair.second, recon_results));
+  }
+
+  MultilinearModel model(model_filename);
+
+  // Collect texture information from each input (image, mesh) pair to obtain mean texture
+  {
+    // for each image bundle, render the mesh to FBO with culling to get the visible triangles
+
+    // for each visible triangle, compute the coordinates of its 3 corners
+
+    // for each pixel in the texture map, use backward projection to obtain pixel value in the input image
+
+    // [Optional]: render the mesh with texture to verify the texel values
+
+    // accumulate the texels in average texel map
+  }
+
+  // Shape from shading
 
 
   return 0;
