@@ -86,6 +86,7 @@ int main(int argc, char **argv) {
   } else {
     OffscreenMeshVisualizer visualizer(tex_size, tex_size);
     visualizer.BindMesh(mesh);
+    visualizer.SetRenderMode(OffscreenMeshVisualizer::Texture);
     visualizer.SetMVPMode(OffscreenMeshVisualizer::OrthoNormal);
     QImage img = visualizer.Render();
     img.save("albedo_index.png");
@@ -184,8 +185,20 @@ int main(int argc, char **argv) {
 
   // Collect texture information from each input (image, mesh) pair to obtain mean texture
   {
-    for(auto& image_bundles) {
+    for(auto& bundle : image_bundles) {
+      // Get the geometry of the mesh, update normal
+      model.ApplyWeights(bundle.params.params_model.Wid, bundle.params.params_model.Wexp);
+      mesh.UpdateVertices(model.GetTM());
+
       // for each image bundle, render the mesh to FBO with culling to get the visible triangles
+      OffscreenMeshVisualizer visualizer(bundle.image.width(), bundle.image.height());
+      visualizer.SetMVPMode(OffscreenMeshVisualizer::CamPerspective);
+      visualizer.SetRenderMode(OffscreenMeshVisualizer::Mesh);
+      visualizer.BindMesh(mesh);
+      visualizer.SetCameraParameters(bundle.params.params_cam);
+      visualizer.SetMeshRotationTranslation(bundle.params.params_model.R, bundle.params.params_model.T);
+      QImage img = visualizer.Render();
+      img.save("mesh.png");
 
       // for each visible triangle, compute the coordinates of its 3 corners
 

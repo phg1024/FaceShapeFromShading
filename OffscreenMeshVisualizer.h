@@ -20,6 +20,10 @@ public:
     OrthoNormal,
     CamPerspective
   };
+  enum RenderMode {
+    Texture,
+    Mesh
+  };
   OffscreenMeshVisualizer(int width, int height) : width(width), height(height) {}
 
   void BindMesh(const BasicMesh& in_mesh) {
@@ -33,6 +37,9 @@ public:
     camera_params = cam_params;
   }
 
+  void SetRenderMode(RenderMode mode_in) {
+    render_mode = mode_in;
+  }
   void SetMVPMode(MVPMode mode_in) {
     mode = mode_in;
   }
@@ -45,6 +52,7 @@ protected:
 private:
   int width, height;
   MVPMode mode;
+  RenderMode render_mode;
 
   Vector3d mesh_rotation, mesh_translation;
   CameraParameters camera_params;

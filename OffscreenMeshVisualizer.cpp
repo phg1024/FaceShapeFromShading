@@ -108,33 +108,59 @@ QImage OffscreenMeshVisualizer::Render() const {
 
   SetupViewing();
 
-  PhGUtils::message("rendering index map.");
-  for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
-    auto normal_i = mesh.normal(face_i);
-    auto f = mesh.face_texture(face_i);
-    auto t0 = mesh.texture_coords(f[0]), t1 = mesh.texture_coords(f[1]), t2 = mesh.texture_coords(f[2]);
-    unsigned char r, g, b;
-    encode_index(face_i, r, g, b);
-    int tmp_idx;
-    assert(decode_index(r, g, b, tmp_idx) == face_i);
-    glBegin(GL_TRIANGLES);
+  switch(render_mode) {
+    case Texture: {
+      PhGUtils::message("rendering index map.");
+      for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
+        auto normal_i = mesh.normal(face_i);
+        auto f = mesh.face_texture(face_i);
+        auto t0 = mesh.texture_coords(f[0]), t1 = mesh.texture_coords(f[1]), t2 = mesh.texture_coords(f[2]);
+        unsigned char r, g, b;
+        encode_index(face_i, r, g, b);
+        int tmp_idx;
+        assert(decode_index(r, g, b, tmp_idx) == face_i);
+        glBegin(GL_TRIANGLES);
 
 #if DEBUG_GEN
-    glColor3f(1, 0, 0);
+        glColor3f(1, 0, 0);
       glVertex2f(t0[0], t0[1]);
       glColor3f(0, 1, 0);
       glVertex2f(t1[0], t1[1]);
       glColor3f(0, 0, 1);
       glVertex2f(t2[0], t2[1]);
 #else
-    glColor4ub(r, g, b, 255);
-    glVertex2f(t0[0], t0[1]);
-    glVertex2f(t1[0], t1[1]);
-    glVertex2f(t2[0], t2[1]);
+        glColor4ub(r, g, b, 255);
+        glVertex2f(t0[0], t0[1]);
+        glVertex2f(t1[0], t1[1]);
+        glVertex2f(t2[0], t2[1]);
 #endif
-    glEnd();
+        glEnd();
+      }
+      PhGUtils::message("done.");
+      break;
+    }
+    case Mesh: {
+      PhGUtils::message("rendering index map.");
+      for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
+        auto normal_i = mesh.normal(face_i);
+        auto f = mesh.face(face_i);
+        auto v0 = mesh.vertex(f[0]), v1 = mesh.vertex(f[1]), v2 = mesh.vertex(f[2]);
+        unsigned char r, g, b;
+        encode_index(face_i, r, g, b);
+        int tmp_idx;
+        assert(decode_index(r, g, b, tmp_idx) == face_i);
+        glBegin(GL_TRIANGLES);
+
+        glColor4ub(r, g, b, 255);
+        glVertex3f(v0[0], v0[1], v0[2]);
+        glVertex3f(v1[0], v1[1], v1[2]);
+        glVertex3f(v2[0], v2[1], v2[2]);
+
+        glEnd();
+      }
+      PhGUtils::message("done.");
+    }
   }
-  PhGUtils::message("done.");
 
   // get the bitmap and save it as an image
   QImage img = fbo.toImage();
