@@ -69,7 +69,7 @@ include_directories(${CERES_INCLUDE_DIRS})
 link_libraries(${CERES_LIBRARIES})
 
 # Face shape from shading program
-add_executable(FaceShapeFromShading faceshapefromshading.cpp common.h)
+add_executable(FaceShapeFromShading faceshapefromshading.cpp common.h OffscreenMeshVisualizer.cpp OffscreenMeshVisualizer.h)
 target_link_libraries(FaceShapeFromShading
                       multilinearmodel
                       basicmesh

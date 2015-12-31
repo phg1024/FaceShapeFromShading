@@ -11,10 +11,10 @@
 #include <QFile>
 
 #include <GL/freeglut_std.h>
-#include <boost/timer/timer.hpp>
+#include "glm/glm.hpp"
 
 #include "common.h"
-#include "glm/glm.hpp"
+#include "OffscreenMeshVisualizer.h"
 
 #include <MultilinearReconstruction/basicmesh.h>
 #include <MultilinearReconstruction/ioutilities.h>
@@ -23,6 +23,7 @@
 
 #include "boost/filesystem/operations.hpp"
 #include "boost/filesystem/path.hpp"
+#include <boost/timer/timer.hpp>
 
 namespace fs = boost::filesystem;
 
@@ -83,87 +84,10 @@ int main(int argc, char **argv) {
     albedo_index_map = QImage(albedo_index_map_filename.c_str());
     albedo_index_map.save("albedo_index.png");
   } else {
-    PhGUtils::message("generating index map for albedo.");
-    boost::timer::auto_cpu_timer t("index map for albedo generation time = %w seconds.\n");
-    QSurfaceFormat format;
-    format.setMajorVersion(3);
-    format.setMinorVersion(3);
-
-    QOffscreenSurface surface;
-    surface.setFormat(format);
-    surface.create();
-
-    QOpenGLContext context;
-    context.setFormat(format);
-    if (!context.create())
-      qFatal("Cannot create the requested OpenGL context!");
-    context.makeCurrent(&surface);
-
-    const QRect drawRect(0, 0, tex_size, tex_size);
-    const QSize drawRectSize = drawRect.size();
-
-    QOpenGLFramebufferObjectFormat fboFormat;
-    fboFormat.setSamples(16);
-    fboFormat.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
-
-    QOpenGLFramebufferObject fbo(drawRectSize, fboFormat);
-    fbo.bind();
-
-    // draw the triangles
-
-    // setup OpenGL viewing
-#define DEBUG_GEN 0   // Change this to 1 to generate albedo pixel map
-#if DEBUG_GEN
-    glShadeModel(GL_SMOOTH);
-#else
-    glShadeModel(GL_FLAT);
-#endif
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
-
-    glClearColor(0, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glEnable(GL_DEPTH_TEST);
-
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    gluOrtho2D(0.0, 1.0, 0.0, 1.0);
-    glViewport(0, 0, tex_size, tex_size);
-
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-
-    PhGUtils::message("rendering index map.");
-    for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
-      auto normal_i = mesh.normal(face_i);
-      auto f = mesh.face_texture(face_i);
-      auto t0 = mesh.texture_coords(f[0]), t1 = mesh.texture_coords(f[1]), t2 = mesh.texture_coords(f[2]);
-      unsigned char r, g, b;
-      encode_index(face_i, r, g, b);
-      int tmp_idx;
-      assert(decode_index(r, g, b, tmp_idx) == face_i);
-      glBegin(GL_TRIANGLES);
-
-#if DEBUG_GEN
-      glColor3f(1, 0, 0);
-      glVertex2f(t0[0], t0[1]);
-      glColor3f(0, 1, 0);
-      glVertex2f(t1[0], t1[1]);
-      glColor3f(0, 0, 1);
-      glVertex2f(t2[0], t2[1]);
-#else
-      glColor4ub(r, g, b, 255);
-      glVertex2f(t0[0], t0[1]);
-      glVertex2f(t1[0], t1[1]);
-      glVertex2f(t2[0], t2[1]);
-#endif
-      glEnd();
-    }
-    PhGUtils::message("done.");
-
-    // get the bitmap and save it as an image
-    QImage img = fbo.toImage();
-    fbo.release();
+    OffscreenMeshVisualizer visualizer(tex_size, tex_size);
+    visualizer.BindMesh(mesh);
+    visualizer.SetMVPMode(OffscreenMeshVisualizer::OrthoNormal);
+    QImage img = visualizer.Render();
     img.save("albedo_index.png");
     albedo_index_map = img;
   }
@@ -260,15 +184,17 @@ int main(int argc, char **argv) {
 
   // Collect texture information from each input (image, mesh) pair to obtain mean texture
   {
-    // for each image bundle, render the mesh to FBO with culling to get the visible triangles
+    for(auto& image_bundles) {
+      // for each image bundle, render the mesh to FBO with culling to get the visible triangles
 
-    // for each visible triangle, compute the coordinates of its 3 corners
+      // for each visible triangle, compute the coordinates of its 3 corners
 
-    // for each pixel in the texture map, use backward projection to obtain pixel value in the input image
+      // for each pixel in the texture map, use backward projection to obtain pixel value in the input image
 
-    // [Optional]: render the mesh with texture to verify the texel values
+      // [Optional]: render the mesh with texture to verify the texel values
 
-    // accumulate the texels in average texel map
+      // accumulate the texels in average texel map
+    }
   }
 
   // Shape from shading
