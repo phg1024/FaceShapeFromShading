@@ -14,6 +14,8 @@
 #include "glm/glm.hpp"
 #include "gli/gli.hpp"
 
+#include <opencv2/opencv.hpp>
+
 #include "common.h"
 #include "OffscreenMeshVisualizer.h"
 #include "utils.h"
@@ -252,6 +254,8 @@ int main(int argc, char **argv) {
           // take the pixel from the input image through bilinear sampling
           glm::dvec3 texel = bilinear_sample(bundle.image, v_img.x, bundle.image.height()-1-v_img.y);
 
+          if(texel.r == 0 && texel.g == 0 && texel.b == 0) continue;
+
           mean_texture[i][j] += texel;
           mean_texture_weight[i][j] += 1.0;
         }
@@ -267,6 +271,7 @@ int main(int argc, char **argv) {
         if(weight_ij == 0) continue;
         else {
           glm::dvec3 texel = mean_texture[i][j] / weight_ij;
+          mean_texture[i][j] = texel;
           mean_texture_image.setPixel(j, i, qRgb(texel.r, texel.g, texel.b));
         }
       }
@@ -276,9 +281,13 @@ int main(int argc, char **argv) {
 
   {
     // Shape from shading
-
-    // fix albedo and normal map, estimate lighting coefficients
     const int num_images = image_bundles.size();
+
+    vector<VectorXd> ligting_coeffs(num_images);
+    vector<cv::Mat> normal_maps(num_images);
+    vector<cv::Mat> albedos(num_images);
+
+    // generate reference normal map
     for(int i=0;i<num_images;++i) {
       auto& bundle = image_bundles[i];
       // get the geometry of the mesh, update normal
@@ -295,8 +304,38 @@ int main(int argc, char **argv) {
       visualizer.SetMeshRotationTranslation(bundle.params.params_model.R, bundle.params.params_model.T);
       QImage img = visualizer.Render();
 
-      img.save(string("normal" + std::to_string(i) + ".png").c_str());
+      // copy to normal maps
+      normal_maps[i] = cv::Mat(img.height(), img.width(), CV_64FC3);
+      for(int y=0;y<img.height();++y) {
+        for(int x=0;x<img.width();++x) {
+          auto pix = img.pixel(x, y);
+          // BGR order, 0~255 range
+          normal_maps[i].at<cv::Vec3d>(y, x) = cv::Vec3d(qBlue(pix), qGreen(pix), qRed(pix));
+        }
+      }
+
+      cv::imwrite("normal" + std::to_string(i) + ".png", normal_maps[i]);
+
+      //img.save(string("normal" + std::to_string(i) + ".png").c_str());
     }
+
+    // initialize albedos
+    for(int i=0;i<num_images;++i) {
+      // copy to mean texture to albedos
+      albedos[i] = cv::Mat(tex_size, tex_size, CV_64FC3);
+      for(int y=0;y<tex_size;++y) {
+        for(int x=0;x<tex_size;++x) {
+          // BGR order, 0~255 range
+          albedos[i].at<cv::Vec3d>(y, x) = cv::Vec3d(mean_texture[y][x].b,
+                                                     mean_texture[y][x].g,
+                                                     mean_texture[y][x].r);
+        }
+      }
+
+      cv::imwrite("albedo" + std::to_string(i) + ".png", albedos[i]);
+    }
+
+    // fix albedo and normal map, estimate lighting coefficients
 
     // fix albedo and lighting, estimate depth
 

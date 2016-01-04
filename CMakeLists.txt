@@ -28,6 +28,9 @@ link_libraries(${Boost_LIBRARIES} -lboost_filesystem -lboost_system)
 # OpenMP
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fopenmp")
 
+find_package( OpenCV REQUIRED )
+link_libraries(${OpenCV_LIBS})
+
 # OpenGL
 find_package(OpenGL REQUIRED)
 find_package(GLUT REQUIRED)

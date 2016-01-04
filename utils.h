@@ -22,6 +22,9 @@ inline glm::dvec3 bilinear_sample(const QImage& img, double x, double y) {
   int x0 = floor(x), x1 = x0 + 1;
   int y0 = floor(y), y1 = y0 + 1;
 
+  if(x0 < 0 || y0 < 0) return glm::dvec3(0, 0, 0);
+  if(x1 >= img.width() || y1 >= img.height()) return glm::dvec3(0, 0, 0);
+
   double c0 = x - x0, c0c = 1 - c0;
   double c1 = y - y0, c1c = 1 - c1;
 
