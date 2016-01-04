@@ -15,6 +15,7 @@
 
 #include "common.h"
 #include "OffscreenMeshVisualizer.h"
+#include "utils.h"
 
 #include <MultilinearReconstruction/basicmesh.h>
 #include <MultilinearReconstruction/ioutilities.h>
@@ -24,6 +25,7 @@
 #include "boost/filesystem/operations.hpp"
 #include "boost/filesystem/path.hpp"
 #include <boost/timer/timer.hpp>
+#include <MultilinearReconstruction/costfunctions.h>
 
 namespace fs = boost::filesystem;
 
@@ -64,17 +66,6 @@ int main(int argc, char **argv) {
   auto contour_indices = LoadContourIndices(contour_points_filename);
 
   const int tex_size = 2048;
-
-  auto encode_index = [](int idx, unsigned char& r, unsigned char& g, unsigned char& b) {
-    r = static_cast<unsigned char>(idx & 0xff); idx >>= 8;
-    g = static_cast<unsigned char>(idx & 0xff); idx >>= 8;
-    b = static_cast<unsigned char>(idx & 0xff);
-  };
-
-  auto decode_index = [](unsigned char r, unsigned char g, unsigned char b, int& idx) {
-    idx = b; idx <<= 8; idx |= g; idx <<= 8; idx |= r;
-    return idx;
-  };
 
   // Generate index map for albedo
   bool generate_index_map = false;
@@ -125,6 +116,7 @@ int main(int argc, char **argv) {
     }
     PhGUtils::message("done.");
   } else {
+    /// @FIXME antialiasing issue because of round-off error
     pixel_map_image = QImage(tex_size, tex_size, QImage::Format_ARGB32);
     pixel_map_image.fill(0);
     PhGUtils::message("generating pixel map for albedo ...");
@@ -186,9 +178,10 @@ int main(int argc, char **argv) {
   // Collect texture information from each input (image, mesh) pair to obtain mean texture
   {
     for(auto& bundle : image_bundles) {
-      // Get the geometry of the mesh, update normal
+      // get the geometry of the mesh, update normal
       model.ApplyWeights(bundle.params.params_model.Wid, bundle.params.params_model.Wexp);
       mesh.UpdateVertices(model.GetTM());
+      mesh.ComputeNormals();
 
       // for each image bundle, render the mesh to FBO with culling to get the visible triangles
       OffscreenMeshVisualizer visualizer(bundle.image.width(), bundle.image.height());
@@ -198,11 +191,59 @@ int main(int argc, char **argv) {
       visualizer.SetCameraParameters(bundle.params.params_cam);
       visualizer.SetMeshRotationTranslation(bundle.params.params_model.R, bundle.params.params_model.T);
       QImage img = visualizer.Render();
+
       img.save("mesh.png");
 
+      // find the visible triangles from the index map
+      set<int> triangles = FindTrianglesIndices(img);
+      cerr << triangles.size() << endl;
+
+      // get the projection parameters
+      glm::dmat4 Rmat = glm::eulerAngleYXZ(bundle.params.params_model.R[0], bundle.params.params_model.R[1],
+                                           bundle.params.params_model.R[2]);
+      glm::dmat4 Tmat = glm::translate(glm::dmat4(1.0),
+                                       glm::dvec3(bundle.params.params_model.T[0],
+                                                  bundle.params.params_model.T[1],
+                                                  bundle.params.params_model.T[2]));
+      glm::dmat4 Mview = Tmat * Rmat;
+
       // for each visible triangle, compute the coordinates of its 3 corners
+      QImage img_vertices = img;
+      vector<vector<glm::dvec3>> triangles_projected;
+      for(auto tidx : triangles) {
+        auto face_i = mesh.face(tidx);
+        auto v0_mesh = mesh.vertex(face_i[0]);
+        auto v1_mesh = mesh.vertex(face_i[1]);
+        auto v2_mesh = mesh.vertex(face_i[2]);
+        glm::dvec3 v0_tri = ProjectPoint(glm::dvec3(v0_mesh[0], v0_mesh[1], v0_mesh[2]), Mview, bundle.params.params_cam);
+        glm::dvec3 v1_tri = ProjectPoint(glm::dvec3(v1_mesh[0], v1_mesh[1], v1_mesh[2]), Mview, bundle.params.params_cam);
+        glm::dvec3 v2_tri = ProjectPoint(glm::dvec3(v2_mesh[0], v2_mesh[1], v2_mesh[2]), Mview, bundle.params.params_cam);
+        triangles_projected.push_back(vector<glm::dvec3>{v0_tri, v1_tri, v2_tri});
+
+
+        img_vertices.setPixel(v0_tri.x, img.height()-1-v0_tri.y, qRgb(255, 255, 255));
+        img_vertices.setPixel(v1_tri.x, img.height()-1-v1_tri.y, qRgb(255, 255, 255));
+        img_vertices.setPixel(v2_tri.x, img.height()-1-v2_tri.y, qRgb(255, 255, 255));
+      }
+      img_vertices.save("mesh_with_vertices.png");
 
       // for each pixel in the texture map, use backward projection to obtain pixel value in the input image
+      for(int i=0;i<tex_size;++i) {
+        for(int j=0;j<tex_size;++j) {
+          PixelInfo pix_ij = albedo_pixel_map[i][j];
+
+          auto face_i = mesh.face(pix_ij.fidx);
+          auto v0_mesh = mesh.vertex(face_i[0]);
+          auto v1_mesh = mesh.vertex(face_i[1]);
+          auto v2_mesh = mesh.vertex(face_i[2]);
+
+          auto v = v0_mesh * pix_ij.bcoords.x + v1_mesh * pix_ij.bcoords.y + v2_mesh * pix_ij.bcoords.z;
+
+          glm::dvec3 v_img = ProjectPoint(glm::dvec3(v[0], v[1], v[2]), Mview, bundle.params.params_cam);
+
+          // take the pixel from the input image through bilinear sampling
+        }
+      }
 
       // [Optional]: render the mesh with texture to verify the texel values
 

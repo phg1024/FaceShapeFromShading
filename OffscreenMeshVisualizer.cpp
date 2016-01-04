@@ -99,8 +99,9 @@ QImage OffscreenMeshVisualizer::Render() const {
 #else
   glShadeModel(GL_FLAT);
 #endif
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+
+  glEnable(GL_CULL_FACE);
+  glCullFace(GL_BACK);
 
   glClearColor(0, 0, 0, 1);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -145,15 +146,24 @@ QImage OffscreenMeshVisualizer::Render() const {
         auto normal_i = mesh.normal(face_i);
         auto f = mesh.face(face_i);
         auto v0 = mesh.vertex(f[0]), v1 = mesh.vertex(f[1]), v2 = mesh.vertex(f[2]);
+        auto n = mesh.normal(face_i);
         unsigned char r, g, b;
         encode_index(face_i, r, g, b);
         int tmp_idx;
         assert(decode_index(r, g, b, tmp_idx) == face_i);
+
+        //glShadeModel(GL_SMOOTH);
+
         glBegin(GL_TRIANGLES);
 
+        glNormal3f(n[0], n[1], n[2]);
         glColor4ub(r, g, b, 255);
+
+        //glColor3f(1, 0, 0);
         glVertex3f(v0[0], v0[1], v0[2]);
+        //glColor3f(0, 1, 0);
         glVertex3f(v1[0], v1[1], v1[2]);
+        //glColor3f(0, 0, 1);
         glVertex3f(v2[0], v2[1], v2[2]);
 
         glEnd();
