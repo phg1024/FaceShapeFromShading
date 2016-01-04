@@ -23,12 +23,16 @@ public:
   enum RenderMode {
     Texture,
     Normal,
-    Mesh
+    Mesh,
+    TexturedMesh
   };
   OffscreenMeshVisualizer(int width, int height) : width(width), height(height) {}
 
   void BindMesh(const BasicMesh& in_mesh) {
     mesh = in_mesh;
+  }
+  void BindTexture(const QImage& in_texture) {
+    texture = in_texture;
   }
   void SetMeshRotationTranslation(const Vector3d& R, const Vector3d& T) {
     mesh_rotation = R;
@@ -59,6 +63,7 @@ private:
   CameraParameters camera_params;
 
   BasicMesh mesh;
+  QImage texture;
 };
 
 

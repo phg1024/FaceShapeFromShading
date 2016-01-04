@@ -191,6 +191,45 @@ QImage OffscreenMeshVisualizer::Render(bool multi_sampled) const {
       PhGUtils::message("done.");
       break;
     }
+    case TexturedMesh: {
+      PhGUtils::message("rendering mesh.");
+      glEnable(GL_TEXTURE);
+
+      GLuint image_tex;
+      // generate texture
+      glEnable(GL_TEXTURE_2D);
+      glGenTextures(1, &image_tex);
+      glBindTexture(GL_TEXTURE_2D, image_tex);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, texture.width(), texture.height(), 0, GL_RGBA,
+                   GL_UNSIGNED_BYTE, texture.bits());
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+      glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+
+      for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
+        auto normal_i = mesh.normal(face_i);
+        auto f = mesh.face(face_i);
+        auto v0 = mesh.vertex(f[0]), v1 = mesh.vertex(f[1]), v2 = mesh.vertex(f[2]);
+        auto n = mesh.normal(face_i);
+        auto tf = mesh.face_texture(face_i);
+        auto t0 = mesh.texture_coords(tf[0]), t1 = mesh.texture_coords(tf[1]), t2 = mesh.texture_coords(tf[2]);
+
+        glShadeModel(GL_SMOOTH);
+
+        glBegin(GL_TRIANGLES);
+
+        glNormal3f(n[0], n[1], n[2]);
+
+        glTexCoord2f(t0[0], 1.0-t0[1]); glVertex3f(v0[0], v0[1], v0[2]);
+        glTexCoord2f(t1[0], 1.0-t1[1]); glVertex3f(v1[0], v1[1], v1[2]);
+        glTexCoord2f(t2[0], 1.0-t2[1]); glVertex3f(v2[0], v2[1], v2[2]);
+
+        glEnd();
+      }
+      PhGUtils::message("done.");
+      break;
+    }
   }
 
   // get the bitmap and save it as an image

@@ -181,6 +181,7 @@ int main(int argc, char **argv) {
   vector<vector<double>> mean_texture_weight(tex_size, vector<double>(tex_size, 0));
 
   // Collect texture information from each input (image, mesh) pair to obtain mean texture
+  QImage mean_texture_image;
   {
     for(auto& bundle : image_bundles) {
       // get the geometry of the mesh, update normal
@@ -263,7 +264,7 @@ int main(int argc, char **argv) {
     }
 
     // [Optional]: render the mesh with texture to verify the texel values
-    QImage mean_texture_image = QImage(tex_size, tex_size, QImage::Format_ARGB32);
+    mean_texture_image = QImage(tex_size, tex_size, QImage::Format_ARGB32);
     mean_texture_image.fill(0);
     for(int i=0;i<tex_size;++i) {
       for (int j = 0; j < tex_size; ++j) {
@@ -280,7 +281,7 @@ int main(int argc, char **argv) {
   }
 
   {
-    // Shape from shading
+    // [Shape from shading] initialization
     const int num_images = image_bundles.size();
 
     vector<VectorXd> ligting_coeffs(num_images);
@@ -309,33 +310,127 @@ int main(int argc, char **argv) {
       for(int y=0;y<img.height();++y) {
         for(int x=0;x<img.width();++x) {
           auto pix = img.pixel(x, y);
-          // BGR order, 0~255 range
-          normal_maps[i].at<cv::Vec3d>(y, x) = cv::Vec3d(qBlue(pix), qGreen(pix), qRed(pix));
+          // 0~255 range
+          normal_maps[i].at<cv::Vec3d>(y, x) = cv::Vec3d(qRed(pix), qGreen(pix), qBlue(pix));
         }
       }
 
+      //img.save(string("normal" + std::to_string(i) + ".png").c_str());
+
       cv::imwrite("normal" + std::to_string(i) + ".png", normal_maps[i]);
 
-      //img.save(string("normal" + std::to_string(i) + ".png").c_str());
+      // convert back to [-1, 1] range
+      normal_maps[i] = (normal_maps[i] / 255.0) * 2.0 - 1.0;
     }
 
-    // initialize albedos
+    // initialize albedos by rendering the mesh with texture
     for(int i=0;i<num_images;++i) {
       // copy to mean texture to albedos
-      albedos[i] = cv::Mat(tex_size, tex_size, CV_64FC3);
-      for(int y=0;y<tex_size;++y) {
-        for(int x=0;x<tex_size;++x) {
-          // BGR order, 0~255 range
-          albedos[i].at<cv::Vec3d>(y, x) = cv::Vec3d(mean_texture[y][x].b,
-                                                     mean_texture[y][x].g,
-                                                     mean_texture[y][x].r);
+      auto& bundle = image_bundles[i];
+
+      // get the geometry of the mesh, update normal
+      model.ApplyWeights(bundle.params.params_model.Wid, bundle.params.params_model.Wexp);
+      mesh.UpdateVertices(model.GetTM());
+      mesh.ComputeNormals();
+
+      // for each image bundle, render the mesh to FBO with culling to get the visible triangles
+      OffscreenMeshVisualizer visualizer(bundle.image.width(), bundle.image.height());
+      visualizer.SetMVPMode(OffscreenMeshVisualizer::CamPerspective);
+      visualizer.SetRenderMode(OffscreenMeshVisualizer::TexturedMesh);
+      visualizer.BindMesh(mesh);
+      visualizer.BindTexture(mean_texture_image);
+      visualizer.SetCameraParameters(bundle.params.params_cam);
+      visualizer.SetMeshRotationTranslation(bundle.params.params_model.R, bundle.params.params_model.T);
+      QImage img = visualizer.Render();
+
+      QImage albedo_image = visualizer.Render(true);
+
+      albedos[i] = cv::Mat(bundle.image.height(), bundle.image.width(), CV_64FC3);
+      for(int y=0;y<albedo_image.height();++y) {
+        for(int x=0;x<albedo_image.width();++x) {
+
+          QRgb pix = albedo_image.pixel(x, y);
+          unsigned char r = static_cast<unsigned char>(qRed(pix));
+          unsigned char g = static_cast<unsigned char>(qGreen(pix));
+          unsigned char b = static_cast<unsigned char>(qBlue(pix));
+
+          // 0~255 range
+          albedos[i].at<cv::Vec3d>(y, x) = cv::Vec3d(r, g, b);
         }
       }
 
       cv::imwrite("albedo" + std::to_string(i) + ".png", albedos[i]);
+
+      // convert to [0, 1] range
+      albedos[i] /= 255.0;
     }
 
+    // [Shape from shading] main loop
+
     // fix albedo and normal map, estimate lighting coefficients
+    for(int i=0;i<num_images;++i) {
+      auto& bundle = image_bundles[i];
+      // collect constraints
+      vector<glm::dvec3> normals_i;
+      vector<glm::dvec3> albedo_i;
+      vector<glm::dvec3> pixels_i;
+      for(int y=0;y<normal_maps[i].rows;++y) {
+        for(int x=0;x<normal_maps[i].cols;++x) {
+          cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(y, x);
+          if(pix[0] == 0 && pix[1] == 0 && pix[2] == 0) continue;
+          else {
+            // restore r, g, b order -> (x, y, z) for normal
+            normals_i.push_back(glm::dvec3(pix[0], pix[1], pix[2]));
+
+            cv::Vec3d pix_albedo = albedos[i].at<cv::Vec3d>(y, x);
+            albedo_i.push_back(glm::dvec3(pix_albedo[0], pix_albedo[1], pix_albedo[2]));
+
+            auto pix_i = bundle.image.pixel(x, y);
+            pixels_i.push_back(glm::dvec3(qRed(pix_i) / 255.0, qGreen(pix_i) / 255.0, qBlue(pix_i) / 255.0));
+          }
+        }
+      }
+
+      // solve it
+      const int num_constraints = normals_i.size();
+      const int num_dof = 4;  // use first order approximation
+      MatrixXd A(num_constraints * 3, num_dof);
+      VectorXd b(num_constraints * 3);
+      for(int i=0, offset=0;i<num_constraints;++i, offset+=3) {
+        A(offset, 0) = 1.0; A(offset, 1) = normals_i[i].x; A(offset, 1) = normals_i[i].y; A(offset, 1) = normals_i[i].z;
+        A.row(offset+1) = A.row(offset);
+        A.row(offset+2) = A.row(offset);
+        A.row(offset) *= albedo_i[i].r;
+        A.row(offset+1) *= albedo_i[i].g;
+        A.row(offset+2) *= albedo_i[i].b;
+
+        b(offset) = pixels_i[i].r;
+        b(offset+1) = pixels_i[i].g;
+        b(offset+2) = pixels_i[i].b;
+      }
+
+      VectorXd l_i = A.jacobiSvd(ComputeThinU | ComputeThinV).solve(b);
+      cout << l_i.transpose() << endl;
+
+      // [Optional] output result of estimated lighting
+      cv::Mat image_with_lighting = normal_maps[i].clone();
+      for(int y=0;y<normal_maps[i].rows;++y) {
+        for(int x=0;x<normal_maps[i].cols;++x) {
+          cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(y, x);
+          if(pix[0] == 0 && pix[1] == 0 && pix[2] == 0) continue;
+          else {
+            VectorXd Y(4);
+            Y(0) = 1.0; Y(1) = pix[0]; Y(2) = pix[1]; Y(3) = pix[2];
+
+            double LdotY = l_i.transpose() * Y;
+            cv::Vec3d rho = albedos[i].at<cv::Vec3d>(y, x) * 255.0 * LdotY;
+
+            image_with_lighting.at<cv::Vec3d>(y, x) = cv::Vec3d(rho[0], rho[1], rho[2]);
+          }
+        }
+      }
+      cv::imwrite("lighting" + std::to_string(i) + ".png", image_with_lighting);
+    }
 
     // fix albedo and lighting, estimate depth
 
