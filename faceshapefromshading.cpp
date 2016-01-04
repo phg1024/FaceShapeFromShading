@@ -12,6 +12,7 @@
 
 #include <GL/freeglut_std.h>
 #include "glm/glm.hpp"
+#include "gli/gli.hpp"
 
 #include "common.h"
 #include "OffscreenMeshVisualizer.h"
@@ -68,7 +69,7 @@ int main(int argc, char **argv) {
   const int tex_size = 2048;
 
   // Generate index map for albedo
-  bool generate_index_map = false;
+  bool generate_index_map = true;
   QImage albedo_index_map;
   if(QFile::exists(albedo_index_map_filename.c_str()) && (!generate_index_map)) {
     PhGUtils::message("loading index map for albedo.");
@@ -174,6 +175,8 @@ int main(int argc, char **argv) {
   }
 
   MultilinearModel model(model_filename);
+  vector<vector<glm::dvec3>> mean_texture(tex_size, vector<glm::dvec3>(tex_size, glm::dvec3(0, 0, 0)));
+  vector<vector<double>> mean_texture_weight(tex_size, vector<double>(tex_size, 0));
 
   // Collect texture information from each input (image, mesh) pair to obtain mean texture
   {
@@ -228,11 +231,16 @@ int main(int argc, char **argv) {
       img_vertices.save("mesh_with_vertices.png");
 
       // for each pixel in the texture map, use backward projection to obtain pixel value in the input image
+      // accumulate the texels in average texel map
       for(int i=0;i<tex_size;++i) {
         for(int j=0;j<tex_size;++j) {
           PixelInfo pix_ij = albedo_pixel_map[i][j];
 
+          // skip if the triangle is not visible
+          if(triangles.find(pix_ij.fidx) == triangles.end()) continue;
+
           auto face_i = mesh.face(pix_ij.fidx);
+
           auto v0_mesh = mesh.vertex(face_i[0]);
           auto v1_mesh = mesh.vertex(face_i[1]);
           auto v2_mesh = mesh.vertex(face_i[2]);
@@ -242,13 +250,28 @@ int main(int argc, char **argv) {
           glm::dvec3 v_img = ProjectPoint(glm::dvec3(v[0], v[1], v[2]), Mview, bundle.params.params_cam);
 
           // take the pixel from the input image through bilinear sampling
+          glm::dvec3 texel = bilinear_sample(bundle.image, v_img.x, bundle.image.height()-1-v_img.y);
+
+          mean_texture[i][j] += texel;
+          mean_texture_weight[i][j] += 1.0;
         }
       }
-
-      // [Optional]: render the mesh with texture to verify the texel values
-
-      // accumulate the texels in average texel map
     }
+
+    // [Optional]: render the mesh with texture to verify the texel values
+    QImage mean_texture_image = QImage(tex_size, tex_size, QImage::Format_ARGB32);
+    mean_texture_image.fill(0);
+    for(int i=0;i<tex_size;++i) {
+      for (int j = 0; j < tex_size; ++j) {
+        double weight_ij = mean_texture_weight[i][j];
+        if(weight_ij == 0) continue;
+        else {
+          glm::dvec3 texel = mean_texture[i][j] / weight_ij;
+          mean_texture_image.setPixel(j, i, qRgb(texel.r, texel.g, texel.b));
+        }
+      }
+    }
+    mean_texture_image.save("mean_texture.png");
   }
 
   // Shape from shading

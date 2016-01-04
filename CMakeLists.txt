@@ -40,6 +40,13 @@ if (GLEW_FOUND)
     link_libraries(${GLEW_LIBRARIES})
 endif()
 
+# GLI
+find_package(GLI REQUIRED)
+if (GLI_FOUND)
+    message([] ${GLI_INCLUDE_DIRS})
+    include_directories(${GLI_INCLUDE_DIRS})
+endif()
+
 # Eigen
 set(EIGEN_INCLUDE_DIR /usr/include/eigen3)
 include_directories(${EIGEN_INCLUDE_DIR})

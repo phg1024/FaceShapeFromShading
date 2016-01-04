@@ -1,4 +1,5 @@
 #include "OffscreenMeshVisualizer.h"
+#include "utils.h"
 
 #include <GL/freeglut_std.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -73,19 +74,9 @@ QImage OffscreenMeshVisualizer::Render() const {
   const QSize drawRectSize = drawRect.size();
 
   QOpenGLFramebufferObjectFormat fboFormat;
-  fboFormat.setSamples(16);
+  // Disable sampling to avoid blending along edges
+  fboFormat.setSamples(0);
   fboFormat.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
-
-  auto encode_index = [](int idx, unsigned char& r, unsigned char& g, unsigned char& b) {
-    r = static_cast<unsigned char>(idx & 0xff); idx >>= 8;
-    g = static_cast<unsigned char>(idx & 0xff); idx >>= 8;
-    b = static_cast<unsigned char>(idx & 0xff);
-  };
-
-  auto decode_index = [](unsigned char r, unsigned char g, unsigned char b, int& idx) {
-    idx = b; idx <<= 8; idx |= g; idx <<= 8; idx |= r;
-    return idx;
-  };
 
   QOpenGLFramebufferObject fbo(drawRectSize, fboFormat);
   fbo.bind();
@@ -96,6 +87,7 @@ QImage OffscreenMeshVisualizer::Render() const {
 #define DEBUG_GEN 0   // Change this to 1 to generate albedo pixel map
 #if DEBUG_GEN
   glShadeModel(GL_SMOOTH);
+  glDisable(GL_BLEND);
 #else
   glShadeModel(GL_FLAT);
 #endif
@@ -123,12 +115,12 @@ QImage OffscreenMeshVisualizer::Render() const {
         glBegin(GL_TRIANGLES);
 
 #if DEBUG_GEN
-        glColor3f(1, 0, 0);
-      glVertex2f(t0[0], t0[1]);
-      glColor3f(0, 1, 0);
-      glVertex2f(t1[0], t1[1]);
-      glColor3f(0, 0, 1);
-      glVertex2f(t2[0], t2[1]);
+        glColor4f(1, 0, 0, 1);
+        glVertex2f(t0[0], t0[1]);
+        glColor4f(0, 1, 0, 1);
+        glVertex2f(t1[0], t1[1]);
+        glColor4f(0, 0, 1, 1);
+        glVertex2f(t2[0], t2[1]);
 #else
         glColor4ub(r, g, b, 255);
         glVertex2f(t0[0], t0[1]);
