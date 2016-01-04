@@ -22,6 +22,7 @@ public:
   };
   enum RenderMode {
     Texture,
+    Normal,
     Mesh
   };
   OffscreenMeshVisualizer(int width, int height) : width(width), height(height) {}
@@ -44,7 +45,7 @@ public:
     mode = mode_in;
   }
 
-  QImage Render() const;
+  QImage Render(bool multi_sampled=false) const;
 
 protected:
   void SetupViewing() const;

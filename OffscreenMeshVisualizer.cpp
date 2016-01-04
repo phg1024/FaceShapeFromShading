@@ -53,9 +53,8 @@ void OffscreenMeshVisualizer::SetupViewing() const {
   }
 }
 
-QImage OffscreenMeshVisualizer::Render() const {
-  PhGUtils::message("generating index map for albedo.");
-  boost::timer::auto_cpu_timer t("index map for albedo generation time = %w seconds.\n");
+QImage OffscreenMeshVisualizer::Render(bool multi_sampled) const {
+  boost::timer::auto_cpu_timer t("render time = %w seconds.\n");
   QSurfaceFormat format;
   format.setMajorVersion(3);
   format.setMinorVersion(3);
@@ -75,7 +74,8 @@ QImage OffscreenMeshVisualizer::Render() const {
 
   QOpenGLFramebufferObjectFormat fboFormat;
   // Disable sampling to avoid blending along edges
-  fboFormat.setSamples(0);
+  if(multi_sampled) fboFormat.setSamples(16);
+  else fboFormat.setSamples(0);
   fboFormat.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
 
   QOpenGLFramebufferObject fbo(drawRectSize, fboFormat);
@@ -103,7 +103,7 @@ QImage OffscreenMeshVisualizer::Render() const {
 
   switch(render_mode) {
     case Texture: {
-      PhGUtils::message("rendering index map.");
+      PhGUtils::message("rendering texture.");
       for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
         auto normal_i = mesh.normal(face_i);
         auto f = mesh.face_texture(face_i);
@@ -133,7 +133,7 @@ QImage OffscreenMeshVisualizer::Render() const {
       break;
     }
     case Mesh: {
-      PhGUtils::message("rendering index map.");
+      PhGUtils::message("rendering mesh.");
       for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
         auto normal_i = mesh.normal(face_i);
         auto f = mesh.face(face_i);
@@ -144,7 +144,7 @@ QImage OffscreenMeshVisualizer::Render() const {
         int tmp_idx;
         assert(decode_index(r, g, b, tmp_idx) == face_i);
 
-        //glShadeModel(GL_SMOOTH);
+        glShadeModel(GL_FLAT);
 
         glBegin(GL_TRIANGLES);
 
@@ -161,6 +161,35 @@ QImage OffscreenMeshVisualizer::Render() const {
         glEnd();
       }
       PhGUtils::message("done.");
+      break;
+    }
+    case Normal: {
+      PhGUtils::message("rendering mesh.");
+      for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
+        auto normal_i = mesh.normal(face_i);
+        auto f = mesh.face(face_i);
+        auto v0 = mesh.vertex(f[0]), v1 = mesh.vertex(f[1]), v2 = mesh.vertex(f[2]);
+        auto n = mesh.normal(face_i);
+        Vector3d nv0 = (mesh.vertex_normal(f[0]) + Vector3d(1.0, 1.0, 1.0)) * 0.5;
+        Vector3d nv1 = (mesh.vertex_normal(f[1]) + Vector3d(1.0, 1.0, 1.0)) * 0.5;
+        Vector3d nv2 = (mesh.vertex_normal(f[2]) + Vector3d(1.0, 1.0, 1.0)) * 0.5;
+
+        glShadeModel(GL_SMOOTH);
+
+        glBegin(GL_TRIANGLES);
+
+        glNormal3f(n[0], n[1], n[2]);
+        glColor3f(nv0[0], nv0[1], nv0[2]);
+        glVertex3f(v0[0], v0[1], v0[2]);
+        glColor3f(nv1[0], nv1[1], nv1[2]);
+        glVertex3f(v1[0], v1[1], v1[2]);
+        glColor3f(nv2[0], nv2[1], nv2[2]);
+        glVertex3f(v2[0], v2[1], v2[2]);
+
+        glEnd();
+      }
+      PhGUtils::message("done.");
+      break;
     }
   }
 

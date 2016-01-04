@@ -274,8 +274,34 @@ int main(int argc, char **argv) {
     mean_texture_image.save("mean_texture.png");
   }
 
-  // Shape from shading
+  {
+    // Shape from shading
 
+    // fix albedo and normal map, estimate lighting coefficients
+    const int num_images = image_bundles.size();
+    for(int i=0;i<num_images;++i) {
+      auto& bundle = image_bundles[i];
+      // get the geometry of the mesh, update normal
+      model.ApplyWeights(bundle.params.params_model.Wid, bundle.params.params_model.Wexp);
+      mesh.UpdateVertices(model.GetTM());
+      mesh.ComputeNormals();
+
+      // for each image bundle, render the mesh to FBO with culling to get the visible triangles
+      OffscreenMeshVisualizer visualizer(bundle.image.width(), bundle.image.height());
+      visualizer.SetMVPMode(OffscreenMeshVisualizer::CamPerspective);
+      visualizer.SetRenderMode(OffscreenMeshVisualizer::Normal);
+      visualizer.BindMesh(mesh);
+      visualizer.SetCameraParameters(bundle.params.params_cam);
+      visualizer.SetMeshRotationTranslation(bundle.params.params_model.R, bundle.params.params_model.T);
+      QImage img = visualizer.Render();
+
+      img.save(string("normal" + std::to_string(i) + ".png").c_str());
+    }
+
+    // fix albedo and lighting, estimate depth
+
+    // fix depth and lighting, estimate albedo
+  }
 
   return 0;
 }
