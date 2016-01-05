@@ -371,45 +371,94 @@ int main(int argc, char **argv) {
     for(int i=0;i<num_images;++i) {
       auto& bundle = image_bundles[i];
       // collect constraints
-      vector<glm::dvec3> normals_i;
-      vector<glm::dvec3> albedo_i;
-      vector<glm::dvec3> pixels_i;
+      vector<glm::ivec2> pixel_indices;
+
       for(int y=0;y<normal_maps[i].rows;++y) {
         for(int x=0;x<normal_maps[i].cols;++x) {
           cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(y, x);
           if(pix[0] == 0 && pix[1] == 0 && pix[2] == 0) continue;
           else {
-            // restore r, g, b order -> (x, y, z) for normal
-            normals_i.push_back(glm::dvec3(pix[0], pix[1], pix[2]));
-
             cv::Vec3d pix_albedo = albedos[i].at<cv::Vec3d>(y, x);
-            albedo_i.push_back(glm::dvec3(pix_albedo[0], pix_albedo[1], pix_albedo[2]));
 
-            auto pix_i = bundle.image.pixel(x, y);
-            pixels_i.push_back(glm::dvec3(qRed(pix_i) / 255.0, qGreen(pix_i) / 255.0, qBlue(pix_i) / 255.0));
+            const double THRESHOLD = sqrt(3.0) * 32.0 / 255.0;
+            if(cv::norm(pix_albedo) >= THRESHOLD) {
+              pixel_indices.push_back(glm::ivec2(y, x));
+            }
           }
         }
       }
 
       // solve it
-      const int num_constraints = normals_i.size();
-      const int num_dof = 4;  // use first order approximation
-      MatrixXd A(num_constraints * 3, num_dof);
-      VectorXd b(num_constraints * 3);
-      for(int i=0, offset=0;i<num_constraints;++i, offset+=3) {
-        A(offset, 0) = 1.0; A(offset, 1) = normals_i[i].x; A(offset, 1) = normals_i[i].y; A(offset, 1) = normals_i[i].z;
-        A.row(offset+1) = A.row(offset);
-        A.row(offset+2) = A.row(offset);
-        A.row(offset) *= albedo_i[i].r;
-        A.row(offset+1) *= albedo_i[i].g;
-        A.row(offset+2) *= albedo_i[i].b;
+      const int num_constraints = pixel_indices.size();
 
-        b(offset) = pixels_i[i].r;
-        b(offset+1) = pixels_i[i].g;
-        b(offset+2) = pixels_i[i].b;
+      vector<glm::dvec3> normals_i_ref;
+      vector<glm::dvec3> albedo_i_ref;
+      vector<glm::dvec3> pixels_i_ref;
+
+      MatrixXd normals_i(num_constraints, 3);
+      MatrixXd albedos_i(num_constraints, 3);
+      MatrixXd pixels_i(num_constraints, 3);
+
+      for(int j=0;j<num_constraints;++j) {
+        int r = pixel_indices[j].x, c = pixel_indices[j].y;
+
+        cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(r, c);
+        normals_i_ref.push_back(glm::dvec3(pix[0], pix[1], pix[2]));
+        normals_i(j, 0) = pix[0]; normals_i(j, 1) = pix[1]; normals_i(j, 2) = pix[2];
+
+        cv::Vec3d pix_albedo = albedos[i].at<cv::Vec3d>(r, c);
+        albedo_i_ref.push_back(glm::dvec3(pix_albedo[0], pix_albedo[1], pix_albedo[2]));
+        albedos_i(j, 0) = pix_albedo[0]; albedos_i(j, 1) = pix_albedo[1]; albedos_i(j, 2) = pix_albedo[2];
+
+        auto pix_i = bundle.image.pixel(c, r);
+        pixels_i_ref.push_back(glm::dvec3(qRed(pix_i) / 255.0, qGreen(pix_i) / 255.0, qBlue(pix_i) / 255.0));
+        pixels_i(j, 0) = qRed(pix_i) / 255.0;
+        pixels_i(j, 1) = qGreen(pix_i) / 255.0;
+        pixels_i(j, 2) = qBlue(pix_i) / 255.0;
       }
 
+      const int num_dof = 9;  // use first order approximation
+      MatrixXd Y(num_constraints, num_dof);
+
+      /*
+      for(int j=0;j<num_constraints;++j) {
+        double nx = normals_i_ref[j].x, ny = normals_i_ref[j].y, nz = normals_i_ref[j].z;
+        Y(j, 0) = 1.0;
+        Y(j, 1) = nx; Y(j, 2) = ny; Y(j, 3) = nz;
+        Y(j, 4) = nx * ny; Y(j, 5) = nx * nz; Y(j, 6) = ny * nz;
+        Y(j, 7) = nx * nx - ny * ny;
+        Y(j, 8) = 3 * nz * nz - 1.0;
+      }
+      */
+      Y.col(0) = VectorXd::Ones(num_constraints);
+      Y.col(1) = normals_i.col(0); Y.col(2) = normals_i.col(1); Y.col(3) = normals_i.col(2);
+      Y.col(4) = normals_i.col(0).cwiseProduct(normals_i.col(1));
+      Y.col(5) = normals_i.col(0).cwiseProduct(normals_i.col(2));
+      Y.col(6) = normals_i.col(1).cwiseProduct(normals_i.col(2));
+      Y.col(7) = normals_i.col(0).cwiseProduct(normals_i.col(0)) - normals_i.col(1).cwiseProduct(normals_i.col(1));
+      Y.col(8) = 3 * normals_i.col(2).cwiseProduct(normals_i.col(2)) - VectorXd::Ones(num_constraints);
+
+      MatrixXd A(num_constraints * 3, num_dof);
+      VectorXd b(num_constraints * 3);
+
+      VectorXd a_vec(num_constraints*3);
+      a_vec.topRows(num_constraints) = albedos_i.col(0);
+      a_vec.middleRows(num_constraints, num_constraints) = albedos_i.col(1);
+      a_vec.bottomRows(num_constraints) = albedos_i.col(2);
+
+      A.topRows(num_constraints) = Y;
+      A.middleRows(num_constraints, num_constraints) = Y;
+      A.bottomRows(num_constraints) = Y;
+      for(int k=0;k<num_dof;++k) {
+        A.col(k) = A.col(k).cwiseProduct(a_vec);
+      }
+
+      b.topRows(num_constraints) = pixels_i.col(0);
+      b.middleRows(num_constraints, num_constraints) = pixels_i.col(1);
+      b.bottomRows(num_constraints) = pixels_i.col(2);
+
       VectorXd l_i = A.jacobiSvd(ComputeThinU | ComputeThinV).solve(b);
+      ligting_coeffs[i] = l_i;
       cout << l_i.transpose() << endl;
 
       // [Optional] output result of estimated lighting
@@ -419,10 +468,15 @@ int main(int argc, char **argv) {
           cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(y, x);
           if(pix[0] == 0 && pix[1] == 0 && pix[2] == 0) continue;
           else {
-            VectorXd Y(4);
-            Y(0) = 1.0; Y(1) = pix[0]; Y(2) = pix[1]; Y(3) = pix[2];
+            VectorXd Y_ij(num_dof);
+            double nx = pix[0], ny = pix[1], nz = pix[2];
+            Y_ij(0) = 1.0;
+            Y_ij(1) = nx; Y_ij(2) = ny; Y_ij(3) = nz;
+            Y_ij(4) = nx * ny; Y_ij(5) = nx * nz; Y_ij(6) = ny * nz;
+            Y_ij(7) = nx * nx - ny * ny;
+            Y_ij(8) = 3 * nz * nz - 1;
 
-            double LdotY = l_i.transpose() * Y;
+            double LdotY = l_i.transpose() * Y_ij;
             cv::Vec3d rho = albedos[i].at<cv::Vec3d>(y, x) * 255.0 * LdotY;
 
             image_with_lighting.at<cv::Vec3d>(y, x) = cv::Vec3d(rho[0], rho[1], rho[2]);
