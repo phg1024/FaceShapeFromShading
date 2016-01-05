@@ -61,4 +61,16 @@ inline set<int> FindTrianglesIndices(const QImage& img) {
   return S;
 }
 
+inline MatrixXd ComputeLoGKernel(int k, double sigma) {
+  MatrixXd kernel(2*k+1, 2*k+1);
+  for(int y=-k, i=0;y<=k;++y, ++i) {
+    for(int x=-k, j=0;x<=k;++x, ++j) {
+      kernel(i, j) = ((x*x+y*y) / 2*sigma*sigma - 1) * exp(-(x*x+y*y)/(2*sigma*sigma));
+    }
+  }
+  const double PI = 3.1415926535897;
+  kernel /= (PI * sigma * sigma * sigma * sigma);
+  return kernel;
+}
+
 #endif //FACESHAPEFROMSHADING_UTILS_H
