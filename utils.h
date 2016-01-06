@@ -7,6 +7,11 @@
 
 #include <MultilinearReconstruction/utils.hpp>
 
+template <typename T>
+T clamp(T val, T lower, T upper) {
+  return std::max(lower, std::min(upper, val));
+}
+
 inline void encode_index(int idx, unsigned char& r, unsigned char& g, unsigned char& b) {
   r = static_cast<unsigned char>(idx & 0xff); idx >>= 8;
   g = static_cast<unsigned char>(idx & 0xff); idx >>= 8;
@@ -63,13 +68,18 @@ inline set<int> FindTrianglesIndices(const QImage& img) {
 
 inline MatrixXd ComputeLoGKernel(int k, double sigma) {
   MatrixXd kernel(2*k+1, 2*k+1);
+  const double sigma2 = sigma * sigma;
+  const double sigma4 = sigma2 * sigma2;
   for(int y=-k, i=0;y<=k;++y, ++i) {
+    double y2 = y * y;
     for(int x=-k, j=0;x<=k;++x, ++j) {
-      kernel(i, j) = ((x*x+y*y) / 2*sigma*sigma - 1) * exp(-(x*x+y*y)/(2*sigma*sigma));
+      double x2 = x * x;
+      double val = (x2 + y2) / (2 * sigma2);
+      kernel(i, j) = (val - 1) * exp(-val);
     }
   }
   const double PI = 3.1415926535897;
-  kernel /= (PI * sigma * sigma * sigma * sigma);
+  kernel /= (PI * sigma4);
   return kernel;
 }
 
