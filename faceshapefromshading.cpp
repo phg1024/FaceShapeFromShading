@@ -411,7 +411,7 @@ int main(int argc, char **argv) {
                 int qidx = ri * num_cols + ci;
 
                 // add this element to the matrix
-                LoG_coeffs.push_back(Tripletd(pidx, qidx, LoG(kr, kc)));
+                LoG_coeffs.push_back(Tripletd(pidx, qidx, LoG(kr+kLoG, kc+kLoG)));
               }
             }
           }
@@ -430,6 +430,8 @@ int main(int argc, char **argv) {
       }
 
       cv::filter2D(albedos_ref[i], albedos_ref_LoG[i], -1, LoG_kernel, cv::Point(-1, -1), 0, cv::BORDER_REPLICATE);
+      cout << albedos_ref[i].rows << 'x' << albedos_ref[i].cols << endl;
+      cout << albedos_ref_LoG[i].rows << 'x' << albedos_ref_LoG[i].cols << endl;
       cv::imwrite("albedo_LoG" + std::to_string(i) + ".png", (albedos_ref_LoG[i] + 0.5) * 255.0);
 
       MatrixXd albedo_ref_LoG_i(num_rows*num_cols, 3);
@@ -568,7 +570,7 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 50.0;
+          const double lambda2 = 10.0;
 
           // ====================================================================
           // collect valid pixels
@@ -646,22 +648,26 @@ int main(int argc, char **argv) {
             A_coeffs.push_back(Tripletd(j, j, LdotY(j)));
           }
 
+          bool all_good = true;
           for(int j=0;j<LoG_coeffs.size();++j) {
               auto& item_j = LoG_coeffs[j];
               if(is_valid_pixel[item_j.row()] && is_valid_pixel[item_j.col()]) {
                 int new_i = pixel_index_map[item_j.row()] + num_constraints;
                 int new_j = pixel_index_map[item_j.col()];
-                assert(new_i >= 0 && new_i < num_constraints);
-                assert(new_j >= 0 && new_j < num_constraints);
+                all_good &= (new_i >= num_constraints && new_i < num_constraints * 2);
+                all_good &= (new_j >= 0 && new_j < num_constraints);
                 A_coeffs.push_back(Tripletd(new_i, new_j, item_j.value() * lambda2));
               }
           }
+          if(all_good) cout << "good" << endl;
 
+#if 0
           ofstream fout("A.txt");
           for(auto ttt : A_coeffs) {
             fout << ttt.row() << ' ' << ttt.col() << ' ' << ttt.value() << endl;
           }
           fout.close();
+#endif
 
           Eigen::SparseMatrix<double> A(num_constraints * 2, num_constraints);
           A.setFromTriplets(A_coeffs.begin(), A_coeffs.end());
@@ -674,7 +680,7 @@ int main(int argc, char **argv) {
           for(int j=0;j<num_constraints;++j) {
             int pidx = pixel_indices_i[j].x * num_cols + pixel_indices_i[j].y;
             B.row(j) = pixels_i.row(j);
-            B.row(j + num_constraints) = albedo_ref_LoG_i.row(pidx) * lambda2;
+            B.row(j + num_constraints) = (albedo_ref_LoG_i.row(pidx) * lambda2).eval();
           }
 
           PhGUtils::message("done.");
@@ -686,7 +692,7 @@ int main(int argc, char **argv) {
           Eigen::SparseMatrix<double> eye(num_constraints, num_constraints);
           for(int j=0;j<num_constraints;++j) eye.insert(j, j) = epsilon;
 
-          Eigen::SparseMatrix<double> AtA = (A.transpose() * A).pruned();
+          Eigen::SparseMatrix<double> AtA = (A.transpose() * A).pruned().eval();
           AtA.makeCompressed();
 
           cout << AtA.rows() << 'x' << AtA.cols() << endl;
@@ -721,7 +727,9 @@ int main(int argc, char **argv) {
           // [Optional] output result of estimated lighting
           // ====================================================================
           QImage image_with_albedo(num_cols, num_rows, QImage::Format_ARGB32);
+          QImage image_with_albedo_lighting(num_cols, num_rows, QImage::Format_ARGB32);
           image_with_albedo.fill(0);
+          image_with_albedo_lighting.fill(0);
           for (int y = 0; y < num_rows; ++y) {
             for (int x = 0; x < num_cols; ++x) {
               cv::Vec3d pix_albedo = albedos[i].at<cv::Vec3d>(y, x);
@@ -744,15 +752,21 @@ int main(int argc, char **argv) {
 
                 double LdotY = lighting_coeffs[i].transpose() * Y_ij;
                 cv::Vec3d pix_val = cv::Vec3d(rho(y*num_cols+x, 0), rho(y*num_cols+x, 1), rho(y*num_cols+x, 2));
-                pix_val *= 255.0 * LdotY;
+                pix_val *= 255.0;
 
                 image_with_albedo.setPixel(x, y, qRgb(clamp<double>(pix_val[0], 0, 255),
                                                       clamp<double>(pix_val[1], 0, 255),
                                                       clamp<double>(pix_val[2], 0, 255)));
+
+                pix_val *= LdotY;
+                image_with_albedo_lighting.setPixel(x, y, qRgb(clamp<double>(pix_val[0], 0, 255),
+                                                               clamp<double>(pix_val[1], 0, 255),
+                                                               clamp<double>(pix_val[2], 0, 255)));
               }
             }
           }
           image_with_albedo.save(string("albedo_opt" + std::to_string(i) + ".png").c_str());
+          image_with_albedo_lighting.save(string("albedo_opt_lighting" + std::to_string(i) + ".png").c_str());
         }
 
         // [Shape from shading] step 3: fix albedo and lighting, estimate normal map
