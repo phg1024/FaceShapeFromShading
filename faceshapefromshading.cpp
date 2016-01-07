@@ -16,12 +16,12 @@
 
 #include <opencv2/opencv.hpp>
 
-#include <Eigen/Sparse>
-#include <Eigen/CholmodSupport>
-
 #include "common.h"
+#include "cost_functions.h"
 #include "OffscreenMeshVisualizer.h"
 #include "utils.h"
+
+#include "ceres/ceres.h"
 
 #include <MultilinearReconstruction/basicmesh.h>
 #include <MultilinearReconstruction/costfunctions.h>
@@ -290,6 +290,7 @@ int main(int argc, char **argv) {
 
     vector<VectorXd> lighting_coeffs(num_images);
     vector<cv::Mat> normal_maps_ref(num_images);
+    vector<cv::Mat> normal_maps_ref_LoG(num_images);
     vector<cv::Mat> normal_maps(num_images);
     vector<cv::Mat> albedos_ref(num_images);
     vector<cv::Mat> albedos_ref_LoG(num_images);
@@ -395,6 +396,7 @@ int main(int argc, char **argv) {
       MatrixXd LoG = ComputeLoGKernel(kLoG, sigmaLoG);
 
       vector<Tripletd> LoG_coeffs;
+      vector<vector<pair<int, double>>> LoG_coeffs_perpixel(num_rows*num_cols);
       SparseMatrixd M_LoG(num_rows*num_cols, num_rows*num_cols);
       {
         boost::timer::auto_cpu_timer timer("[Shape from shading] M_LoG computation time = %w seconds.\n");
@@ -412,6 +414,8 @@ int main(int argc, char **argv) {
 
                 // add this element to the matrix
                 LoG_coeffs.push_back(Tripletd(pidx, qidx, LoG(kr+kLoG, kc+kLoG)));
+
+                LoG_coeffs_perpixel[pidx].push_back(make_pair(qidx, LoG(kr+kLoG, kc+kLoG)));
               }
             }
           }
@@ -420,7 +424,7 @@ int main(int argc, char **argv) {
       }
 
       // ====================================================================
-      // compute LoG filtered reference albedo
+      // compute LoG filtered reference albedo and normal map
       // ====================================================================
       cv::Mat LoG_kernel(kLoG*2+1, kLoG*2+1, CV_64F);
       for(int kr=0;kr<kLoG*2+1;++kr) {
@@ -430,10 +434,9 @@ int main(int argc, char **argv) {
       }
 
       cv::filter2D(albedos_ref[i], albedos_ref_LoG[i], -1, LoG_kernel, cv::Point(-1, -1), 0, cv::BORDER_REPLICATE);
-      cout << albedos_ref[i].rows << 'x' << albedos_ref[i].cols << endl;
-      cout << albedos_ref_LoG[i].rows << 'x' << albedos_ref_LoG[i].cols << endl;
       cv::imwrite("albedo_LoG" + std::to_string(i) + ".png", (albedos_ref_LoG[i] + 0.5) * 255.0);
 
+      // store it in num_pixels-by-3 matrix
       MatrixXd albedo_ref_LoG_i(num_rows*num_cols, 3);
       for(int r=0, pidx=0;r<num_rows;++r) {
         for(int c=0;c<num_cols;++c,++pidx) {
@@ -441,6 +444,20 @@ int main(int argc, char **argv) {
           albedo_ref_LoG_i(pidx, 0) = pix[0];
           albedo_ref_LoG_i(pidx, 1) = pix[1];
           albedo_ref_LoG_i(pidx, 2) = pix[2];
+        }
+      }
+
+      cv::filter2D(normal_maps_ref[i], normal_maps_ref_LoG[i], -1, LoG_kernel, cv::Point(-1, -1), 0, cv::BORDER_REPLICATE);
+      cv::imwrite("normal_LoG" + std::to_string(i) + ".png", (normal_maps_ref_LoG[i] + 1.0) * 0.5 * 255.0);
+
+      // store it in num_pixels-by-3 matrix
+      MatrixXd normal_map_ref_LoG_i(num_rows*num_cols, 3);
+      for(int r=0, pidx=0;r<num_rows;++r) {
+        for(int c=0;c<num_cols;++c,++pidx) {
+          cv::Vec3d pix = normal_maps_ref_LoG[i].at<cv::Vec3d>(r, c);
+          normal_map_ref_LoG_i(pidx, 0) = pix[0];
+          normal_map_ref_LoG_i(pidx, 1) = pix[1];
+          normal_map_ref_LoG_i(pidx, 2) = pix[2];
         }
       }
 
@@ -594,7 +611,6 @@ int main(int argc, char **argv) {
           cout << num_constraints << endl;
 
           MatrixXd normals_i(num_constraints, 3);
-          MatrixXd albedos_i(num_constraints, 3);
           MatrixXd pixels_i(num_constraints, 3);
 
           for (int j = 0; j < num_constraints; ++j) {
@@ -604,11 +620,6 @@ int main(int argc, char **argv) {
             normals_i(j, 0) = pix[0];
             normals_i(j, 1) = pix[1];
             normals_i(j, 2) = pix[2];
-
-            cv::Vec3d pix_albedo = albedos[i].at<cv::Vec3d>(r, c);
-            albedos_i(j, 0) = pix_albedo[0];
-            albedos_i(j, 1) = pix_albedo[1];
-            albedos_i(j, 2) = pix_albedo[2];
 
             auto pix_i = bundle.image.pixel(c, r);
             pixels_i(j, 0) = qRed(pix_i) / 255.0;
@@ -723,6 +734,13 @@ int main(int argc, char **argv) {
             }
           }
 
+          // update albedo
+          for(int j=0;j<num_constraints;++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+            int pidx = r * num_cols + c;
+            albedos[i].at<cv::Vec3d>(r, c) = cv::Vec3d(rho(pidx, 0), rho(pidx, 1), rho(pidx, 2));
+          }
+
           // ====================================================================
           // [Optional] output result of estimated lighting
           // ====================================================================
@@ -771,6 +789,231 @@ int main(int argc, char **argv) {
 
         // [Shape from shading] step 3: fix albedo and lighting, estimate normal map
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
+        {
+          const double w_reg = 15.0;
+          const double w_integrability = 25.0;
+
+          // ====================================================================
+          // collect valid pixels
+          // ====================================================================
+          vector<glm::ivec2> pixel_indices_i;
+
+          for (int y = 0; y < normal_maps[i].rows; ++y) {
+            for (int x = 0; x < normal_maps[i].cols; ++x) {
+              cv::Vec3d pix = albedos[i].at<cv::Vec3d>(y, x);
+              if (pix[0] == 0 && pix[1] == 0 && pix[2] == 0) continue;
+              else {
+                pixel_indices_i.push_back(glm::ivec2(y, x));
+              }
+            }
+          }
+
+          // ====================================================================
+          // collect constraints from valid pixels
+          // ====================================================================
+          const int num_constraints = pixel_indices_i.size();
+          cout << num_constraints << endl;
+
+          MatrixXd albedos_i(num_constraints, 3);
+          MatrixXd pixels_i(num_constraints, 3);
+
+          for (int j = 0; j < num_constraints; ++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+
+            cv::Vec3d pix_albedo = albedos[i].at<cv::Vec3d>(r, c);
+            albedos_i(j, 0) = pix_albedo[0];
+            albedos_i(j, 1) = pix_albedo[1];
+            albedos_i(j, 2) = pix_albedo[2];
+
+            auto pix_i = bundle.image.pixel(c, r);
+            pixels_i(j, 0) = qRed(pix_i) / 255.0;
+            pixels_i(j, 1) = qGreen(pix_i) / 255.0;
+            pixels_i(j, 2) = qBlue(pix_i) / 255.0;
+          }
+
+          // ====================================================================
+          // assemble cost functions
+          // ====================================================================
+
+          // create a valid pixel map first
+          vector<bool> is_valid_pixel(num_rows*num_cols, false);
+          vector<int> pixel_index_map(num_rows*num_cols, -1);
+          for(int j=0;j<num_constraints;++j) {
+            int pidx = pixel_indices_i[j].x * num_cols + pixel_indices_i[j].y;
+            is_valid_pixel[pidx] = true;
+            pixel_index_map[pidx] = j;
+          }
+
+          ceres::Problem problem;
+          VectorXd theta(num_constraints), phi(num_constraints);
+
+          // initialize theta and phi
+          for (int j = 0; j < num_constraints; ++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+
+            cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(r, c);
+            double nx = pix[0], ny = pix[1], nz = pix[2];
+            theta(j) = atan2(ny, nx);
+            phi(j) = acos(nz);
+          }
+
+          PhGUtils::message("Assembling cost functions ...");
+          {
+            boost::timer::auto_cpu_timer timer_solve(
+              "[Shape from shading] Cost function assemble time = %w seconds.\n");
+          // data term
+          for(int j = 0; j < num_constraints; ++j) {
+            ceres::DynamicNumericDiffCostFunction<NormalMapDataTerm> *cost_function =
+              new ceres::DynamicNumericDiffCostFunction<NormalMapDataTerm>(
+                new NormalMapDataTerm(j, pixels_i(j, 0), pixels_i(j, 1), pixels_i(j, 2),
+                                      albedos_i(j, 0), albedos_i(j, 1), albedos_i(j, 2),
+                                      lighting_coeffs[i])
+              );
+
+            cost_function->AddParameterBlock(1);
+            cost_function->AddParameterBlock(1);
+            cost_function->SetNumResiduals(1);
+
+            problem.AddResidualBlock(cost_function, NULL, theta.data()+j, phi.data()+j);
+          }
+
+          // integrability term
+          for(int j = 0; j < num_constraints; ++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+            int pidx = r * num_cols + c;
+            if(c >= num_cols || r >= num_rows) continue;
+
+            int right_idx = pidx + 1;
+            int down_idx = pidx + num_cols;
+            if(is_valid_pixel[down_idx] && is_valid_pixel[right_idx]) {
+              ceres::DynamicNumericDiffCostFunction<NormalMapIntegrabilityTerm> *cost_function =
+                new ceres::DynamicNumericDiffCostFunction<NormalMapIntegrabilityTerm>(
+                  new NormalMapIntegrabilityTerm(w_integrability)
+                );
+
+              cost_function->AddParameterBlock(1);
+              cost_function->AddParameterBlock(1);
+              cost_function->AddParameterBlock(1);
+              cost_function->AddParameterBlock(1);
+              cost_function->AddParameterBlock(1);
+              cost_function->AddParameterBlock(1);
+              cost_function->SetNumResiduals(1);
+
+              problem.AddResidualBlock(cost_function, NULL,
+                                       theta.data()+j, phi.data()+j,
+                                       theta.data()+pixel_index_map[right_idx], phi.data()+pixel_index_map[right_idx],
+                                       theta.data()+pixel_index_map[down_idx], phi.data()+pixel_index_map[down_idx]);
+            }
+          }
+
+          // regularization term
+          for(int j = 0; j < num_constraints; ++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+            int pidx = r * num_cols + c;
+            vector<pair<int, double>> reginfo;
+            for(auto p : LoG_coeffs_perpixel[pidx]) {
+              if(is_valid_pixel[p.first]) reginfo.push_back(p);
+            }
+            if(reginfo.empty()) continue;
+            else {
+              ceres::DynamicNumericDiffCostFunction<NormalMapRegularizationTerm> *cost_function =
+                new ceres::DynamicNumericDiffCostFunction<NormalMapRegularizationTerm>(
+                  new NormalMapRegularizationTerm(reginfo, normal_map_ref_LoG_i, w_reg)
+                );
+
+              cost_function->SetNumResiduals(1);
+
+              vector<double*> params_ptrs;
+              for(auto ri : reginfo) {
+                params_ptrs.push_back(theta.data()+pixel_index_map[ri.first]);
+                cost_function->AddParameterBlock(1);
+                params_ptrs.push_back(phi.data()+pixel_index_map[ri.first]);
+                cost_function->AddParameterBlock(1);
+              }
+
+              problem.AddResidualBlock(cost_function, NULL, params_ptrs);
+            }
+          }
+          }
+
+          PhGUtils::message("done.");
+
+          PhGUtils::message("Solving non-linear least squares ...");
+          {
+            boost::timer::auto_cpu_timer timer_solve(
+              "[Shape from shading] Problem solve time = %w seconds.\n");
+            ceres::Solver::Options options;
+            options.max_num_iterations = 3;
+            options.num_threads = 8;
+            options.num_linear_solver_threads = 8;
+            options.minimizer_type = ceres::LINE_SEARCH;
+            options.line_search_direction_type = ceres::STEEPEST_DESCENT;
+            options.minimizer_progress_to_stdout = false;
+            options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
+            options.sparse_linear_algebra_library_type = ceres::SUITE_SPARSE;
+            ceres::Solver::Summary summary;
+            Solve(options, &problem, &summary);
+            cout << summary.BriefReport() << endl;
+          }
+
+          // update normal map
+          for(int j=0;j<num_constraints;++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+            int pidx = r * num_cols + c;
+            double nx = cos(theta(j)) * sin(phi(j));
+            double ny = sin(theta(j)) * sin(phi(j));
+            double nz = cos(phi(j));
+            normal_maps[i].at<cv::Vec3d>(r, c) = cv::Vec3d(nx, ny, nz);
+          }
+
+          PhGUtils::message("done.");
+
+          // ====================================================================
+          // [Optional] output result of estimated lighting
+          // ====================================================================
+          QImage normal_image(num_cols, num_rows, QImage::Format_ARGB32);
+          QImage image_with_albedo_normal_lighting(num_cols, num_rows, QImage::Format_ARGB32);
+          normal_image.fill(0);
+          image_with_albedo_normal_lighting.fill(0);
+          const int num_dof = 9;
+          for (int y = 0; y < num_rows; ++y) {
+            for (int x = 0; x < num_cols; ++x) {
+              cv::Vec3d pix_albedo = albedos[i].at<cv::Vec3d>(y, x);
+              if (pix_albedo[0] == 0 && pix_albedo[1] == 0 && pix_albedo[2] == 0) {
+                continue;
+              }
+              else {
+                cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(y, x);
+                VectorXd Y_ij(num_dof);
+                double nx = pix[0], ny = pix[1], nz = pix[2];
+                Y_ij(0) = 1.0;
+                Y_ij(1) = nx;
+                Y_ij(2) = ny;
+                Y_ij(3) = nz;
+                Y_ij(4) = nx * ny;
+                Y_ij(5) = nx * nz;
+                Y_ij(6) = ny * nz;
+                Y_ij(7) = nx * nx - ny * ny;
+                Y_ij(8) = 3 * nz * nz - 1;
+
+                normal_image.setPixel(x, y, qRgb(clamp<double>((nx+1)*0.5*255.0, 0, 255),
+                                                 clamp<double>((ny+1)*0.5*255.0, 0, 255),
+                                                 clamp<double>((nz+1)*0.5*255.0, 0, 255)));
+
+                cv::Vec3d rho = pix_albedo;
+                double LdotY = lighting_coeffs[i].transpose() * Y_ij;
+                cv::Vec3d pix_val = cv::Vec3d(rho(0), rho(1), rho(2));
+                pix_val *= 255.0 * LdotY;
+
+                image_with_albedo_normal_lighting.setPixel(x, y, qRgb(clamp<double>(pix_val[0], 0, 255),
+                                                                      clamp<double>(pix_val[1], 0, 255),
+                                                                      clamp<double>(pix_val[2], 0, 255)));
+              }
+            }
+          }
+          normal_image.save(string("normal_opt" + std::to_string(i) + ".png").c_str());
+          image_with_albedo_normal_lighting.save(string("normal_opt_lighting" + std::to_string(i) + ".png").c_str());
+        }
 
       } // [Shape from shading] main loop
 
