@@ -461,7 +461,7 @@ int main(int argc, char **argv) {
         }
       }
 
-      const int max_iters = 3;
+      const int max_iters = 4;
       int iters = 0;
       // [Shape from shading] main loop
       while(iters++ < max_iters){
@@ -583,13 +583,13 @@ int main(int argc, char **argv) {
               }
             }
           }
-          image_with_lighting.save(string("lighting_" + std::to_string(iters) + "_" + std::to_string(i) + ".png").c_str());
+          image_with_lighting.save(string("lighting_" + std::to_string(i) + "_" + std::to_string(iters) + ".png").c_str());
         }
 
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 25.0;
+          const double lambda2 = 100.0 / (iters + 1);
 
           // ====================================================================
           // collect valid pixels
@@ -744,7 +744,7 @@ int main(int argc, char **argv) {
           }
 
           // ====================================================================
-          // [Optional] output result of estimated lighting
+          // [Optional] output result of estimated albedo
           // ====================================================================
           QImage image_with_albedo(num_cols, num_rows, QImage::Format_ARGB32);
           QImage image_with_albedo_lighting(num_cols, num_rows, QImage::Format_ARGB32);
@@ -785,16 +785,13 @@ int main(int argc, char **argv) {
               }
             }
           }
-          image_with_albedo.save(string("albedo_opt_" + std::to_string(iters) + "_" + std::to_string(i) + ".png").c_str());
-          image_with_albedo_lighting.save(string("albedo_opt_lighting_" + std::to_string(iters) + "_" + std::to_string(i) + ".png").c_str());
+          image_with_albedo.save(string("albedo_opt_" + std::to_string(i) + "_" + std::to_string(iters) + ".png").c_str());
+          image_with_albedo_lighting.save(string("albedo_opt_lighting_" + std::to_string(i) + "_" + std::to_string(iters) + ".png").c_str());
         }
 
         // [Shape from shading] step 3: fix albedo and lighting, estimate normal map
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double w_reg = 15.0;
-          const double w_integrability = 25.0;
-
           // ====================================================================
           // collect valid pixels
           // ====================================================================
@@ -855,15 +852,25 @@ int main(int argc, char **argv) {
 
             cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(r, c);
             double nx = pix[0], ny = pix[1], nz = pix[2];
-            theta(j) = atan2(ny, nx);
-            phi(j) = acos(nz);
+
+            // ny = cos(phi)
+            // nx = sin(theta) * sin(phi)
+            // nz = cos(theta) * sin(phi)
+
+            theta(j) = atan2(nx, nz);
+            phi(j) = acos(ny);
           }
+
+          const double w_reg = 0.01;
+          const double w_integrability = 0.00001;
 
           #define USE_ANALYTIC_COST_FUNCTIONS 1
           PhGUtils::message("Assembling cost functions ...");
           {
             boost::timer::auto_cpu_timer timer_solve(
               "[Shape from shading] Cost function assemble time = %w seconds.\n");
+
+            /*
             // data term
             for(int j = 0; j < num_constraints; ++j) {
               #if USE_ANALYTIC_COST_FUNCTIONS
@@ -885,17 +892,20 @@ int main(int argc, char **argv) {
               #endif
               problem.AddResidualBlock(cost_function, NULL, theta.data()+j, phi.data()+j);
             }
+            */
 
+            // @TODO debug integrability term
             // integrability term
             for(int j = 0; j < num_constraints; ++j) {
               int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
               int pidx = r * num_cols + c;
-              if(c >= num_cols || r >= num_rows) continue;
+              if(c < 1 || r < 1 || c >= num_cols || r >= num_rows) continue;
 
               int left_idx = pidx - 1;
-              int down_idx = pidx + num_cols;
-              if(is_valid_pixel[down_idx] && is_valid_pixel[left_idx]) {
-                #if USE_ANALYTIC_COST_FUNCTIONS
+              int up_idx = pidx - num_cols;
+
+              if(is_valid_pixel[left_idx] && is_valid_pixel[up_idx]) {
+                #if 0
                 ceres::CostFunction *cost_function = new NormalMapIntegrabilityTerm_analytic(w_integrability);
                 #else
                 ceres::DynamicNumericDiffCostFunction<NormalMapIntegrabilityTerm> *cost_function =
@@ -903,39 +913,37 @@ int main(int argc, char **argv) {
                     new NormalMapIntegrabilityTerm(w_integrability)
                   );
 
-                cost_function->AddParameterBlock(1);
-                cost_function->AddParameterBlock(1);
-                cost_function->AddParameterBlock(1);
-                cost_function->AddParameterBlock(1);
-                cost_function->AddParameterBlock(1);
-                cost_function->AddParameterBlock(1);
+                for(int param_i = 0; param_i < 6; ++param_i) cost_function->AddParameterBlock(1);
                 cost_function->SetNumResiduals(1);
                 #endif
 
                 problem.AddResidualBlock(cost_function, NULL,
                                          theta.data()+j, phi.data()+j,
                                          theta.data()+pixel_index_map[left_idx], phi.data()+pixel_index_map[left_idx],
-                                         theta.data()+pixel_index_map[down_idx], phi.data()+pixel_index_map[down_idx]);
+                                         theta.data()+pixel_index_map[up_idx], phi.data()+pixel_index_map[up_idx]);
               }
             }
 
+            /*
             // regularization term
             for(int j = 0; j < num_constraints; ++j) {
               int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
               int pidx = r * num_cols + c;
+
               vector<pair<int, double>> reginfo;
               for(auto p : LoG_coeffs_perpixel[pidx]) {
                 if(is_valid_pixel[p.first]) reginfo.push_back(p);
               }
               if(reginfo.empty()) continue;
               else {
+                Vector3d normal_LoG_j(normal_map_ref_LoG_i(pidx, 0), normal_map_ref_LoG_i(pidx, 1), normal_map_ref_LoG_i(pidx, 2));
                 #if USE_ANALYTIC_COST_FUNCTIONS
                 ceres::CostFunction *cost_function =
-                  new NormalMapRegularizationTerm_analytic(reginfo, normal_map_ref_LoG_i, w_reg);
+                  new NormalMapRegularizationTerm_analytic(reginfo, normal_LoG_j, w_reg);
                 #else
                 ceres::DynamicNumericDiffCostFunction<NormalMapRegularizationTerm> *cost_function =
                   new ceres::DynamicNumericDiffCostFunction<NormalMapRegularizationTerm>(
-                    new NormalMapRegularizationTerm(reginfo, normal_map_ref_LoG_i, w_reg)
+                    new NormalMapRegularizationTerm(reginfo, normal_LoG_j, w_reg)
                   );
 
                 cost_function->SetNumResiduals(3);
@@ -953,6 +961,7 @@ int main(int argc, char **argv) {
                 problem.AddResidualBlock(cost_function, NULL, params_ptrs);
               }
             }
+            */
           }
 
           PhGUtils::message("done.");
@@ -966,7 +975,7 @@ int main(int argc, char **argv) {
             options.num_threads = 8;
             options.num_linear_solver_threads = 8;
             options.minimizer_type = ceres::LINE_SEARCH;
-            options.line_search_direction_type = ceres::STEEPEST_DESCENT;
+            options.line_search_direction_type = ceres::LBFGS;
             options.minimizer_progress_to_stdout = false;
             options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
             options.sparse_linear_algebra_library_type = ceres::SUITE_SPARSE;
@@ -979,9 +988,15 @@ int main(int argc, char **argv) {
           for(int j=0;j<num_constraints;++j) {
             int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
             int pidx = r * num_cols + c;
-            double nx = cos(theta(j)) * sin(phi(j));
-            double ny = sin(theta(j)) * sin(phi(j));
-            double nz = cos(phi(j));
+
+            // ny = cos(phi)
+            // nx = sin(theta) * sin(phi)
+            // nz = cos(theta) * sin(phi)
+
+            double nx = sin(theta(j)) * sin(phi(j));
+            double ny = cos(phi(j));
+            double nz = cos(theta(j)) * sin(phi(j));
+
             normal_maps[i].at<cv::Vec3d>(r, c) = cv::Vec3d(nx, ny, nz);
           }
 
@@ -1030,8 +1045,8 @@ int main(int argc, char **argv) {
               }
             }
           }
-          normal_image.save(string("normal_opt_" + std::to_string(iters) + "_" + std::to_string(i) + ".png").c_str());
-          image_with_albedo_normal_lighting.save(string("normal_opt_lighting_" + std::to_string(iters) + "_" + std::to_string(i) + ".png").c_str());
+          normal_image.save(string("normal_opt_" + std::to_string(i) + "_" + std::to_string(iters) + ".png").c_str());
+          image_with_albedo_normal_lighting.save(string("normal_opt_lighting_" + std::to_string(i) + "_" + std::to_string(iters) + ".png").c_str());
         }
 
       } // [Shape from shading] main loop
