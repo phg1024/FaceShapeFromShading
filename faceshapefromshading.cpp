@@ -589,7 +589,7 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 100.0 / (iters + 1);
+          const double lambda2 = 25.0 / (iters + 1);
 
           // ====================================================================
           // collect valid pixels
@@ -701,7 +701,7 @@ int main(int argc, char **argv) {
           // ====================================================================
           // solve linear least squares
           // ====================================================================
-          const double epsilon = 0.01;
+          const double epsilon = 0.00001;
           Eigen::SparseMatrix<double> eye(num_constraints, num_constraints);
           for(int j=0;j<num_constraints;++j) eye.insert(j, j) = epsilon;
 
@@ -861,7 +861,7 @@ int main(int argc, char **argv) {
             phi(j) = acos(ny);
           }
 
-          const double w_reg = 0.01;
+          const double w_reg = 1.0;
           const double w_integrability = 0.00001;
 
           #define USE_ANALYTIC_COST_FUNCTIONS 1
@@ -870,7 +870,6 @@ int main(int argc, char **argv) {
             boost::timer::auto_cpu_timer timer_solve(
               "[Shape from shading] Cost function assemble time = %w seconds.\n");
 
-            /*
             // data term
             for(int j = 0; j < num_constraints; ++j) {
               #if USE_ANALYTIC_COST_FUNCTIONS
@@ -892,7 +891,6 @@ int main(int argc, char **argv) {
               #endif
               problem.AddResidualBlock(cost_function, NULL, theta.data()+j, phi.data()+j);
             }
-            */
 
             // @TODO debug integrability term
             // integrability term
@@ -924,7 +922,6 @@ int main(int argc, char **argv) {
               }
             }
 
-            /*
             // regularization term
             for(int j = 0; j < num_constraints; ++j) {
               int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
@@ -961,7 +958,6 @@ int main(int argc, char **argv) {
                 problem.AddResidualBlock(cost_function, NULL, params_ptrs);
               }
             }
-            */
           }
 
           PhGUtils::message("done.");
@@ -1007,8 +1003,10 @@ int main(int argc, char **argv) {
           // ====================================================================
           QImage normal_image(num_cols, num_rows, QImage::Format_ARGB32);
           QImage image_with_albedo_normal_lighting(num_cols, num_rows, QImage::Format_ARGB32);
+          QImage image_error(num_cols, num_rows, QImage::Format_ARGB32);
           normal_image.fill(0);
           image_with_albedo_normal_lighting.fill(0);
+          image_error.fill(0);
           const int num_dof = 9;
           for (int y = 0; y < num_rows; ++y) {
             for (int x = 0; x < num_cols; ++x) {
@@ -1042,11 +1040,18 @@ int main(int argc, char **argv) {
                 image_with_albedo_normal_lighting.setPixel(x, y, qRgb(clamp<double>(pix_val[0], 0, 255),
                                                                       clamp<double>(pix_val[1], 0, 255),
                                                                       clamp<double>(pix_val[2], 0, 255)));
+
+                auto pix_ij = bundle.image.pixel(x, y);
+                cv::Vec3d pix_diff(fabs(pix_val(0) - qRed(pix_ij)),
+                                   fabs(pix_val(1) - qGreen(pix_ij)),
+                                   fabs(pix_val(2) - qBlue(pix_ij)));
+                image_error.setPixel(x, y, qRgb(pix_diff(0), pix_diff(1), pix_diff(2)));
               }
             }
           }
           normal_image.save(string("normal_opt_" + std::to_string(i) + "_" + std::to_string(iters) + ".png").c_str());
           image_with_albedo_normal_lighting.save(string("normal_opt_lighting_" + std::to_string(i) + "_" + std::to_string(iters) + ".png").c_str());
+          image_error.save(string("error_" + std::to_string(i) + "_" + std::to_string(iters) + ".png").c_str());
         }
 
       } // [Shape from shading] main loop
