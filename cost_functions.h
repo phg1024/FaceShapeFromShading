@@ -223,6 +223,7 @@ struct NormalMapIntegrabilityTerm {
   double weight;
 };
 
+// @FIXME Need to derive the Jacbians for the updated error formula
 struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
   NormalMapIntegrabilityTerm_analytic(double weight) : weight(weight) {
     mutable_parameter_block_sizes()->clear();
@@ -257,6 +258,7 @@ struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
     double nx_u = sin(theta_u) * sin(phi_u);
     double ny_u = cos(phi_u);
 
+#if 0
     const double epsilon = 1e-5;
     double nxnz = safe_division(nx, nz, epsilon);
     double nynz = safe_division(ny, nz, epsilon);
@@ -265,9 +267,26 @@ struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
     double nxnz_u = safe_division(nx_u, nz_u, epsilon);
 
     residuals[0] = ((nxnz_u - nxnz) - (nynz - nynz_l)) * 0.5 * weight;
+#else
+    Vector3d n(nx, ny, nz);
+    Vector3d nu(nx_u, ny_u, nz_u);
+    Vector3d nl(nx_l, ny_l, nz_l);
+    Vector3d dndy = nu - n;
+    Vector3d dndx = n - nl;
+
+    if(fabs(nz) < 1e-3) {
+      nz = (nz < 0)?-1e-3:1e-3;
+    }
+    double nz2 = (nz * nz + 1e-5);
+
+    const Vector3d xvec(1, 0, 0), yvec(0, 1, 0);
+    residuals[0] = -n.dot(dndy.cross(yvec)+dndx.cross(xvec)) / nz2 * 0.5 * weight;
+#endif
 
     if (jacobians != NULL) {
-      for(int param_i=0;param_i<10;++param_i) assert(jacobians[0] != NULL);
+      for(int param_i=0;param_i<6;++param_i) assert(jacobians[0] != NULL);
+
+      // @FIXME the jacobians below are incorrect
 
       // jacobians[0][0] = \frac{\partial E}{\partial \theta}
       jacobians[0][0] = -safe_division(1 + sin(theta) * cos(phi), cos(theta) * cos(theta) * sin(phi), epsilon) * weight * 0.5;
