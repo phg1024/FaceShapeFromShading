@@ -378,8 +378,6 @@ int main(int argc, char **argv) {
     // make a copy, use it as initial value
     albedos = albedos_ref;
 
-    // @TODO compute LoG for reference albedos and reference normal maps
-
     for(int i=0;i<num_images;++i) {
 
       auto &bundle = image_bundles[i];
@@ -1053,8 +1051,30 @@ int main(int argc, char **argv) {
           image_with_albedo_normal_lighting.save(string("normal_opt_lighting_" + std::to_string(i) + "_" + std::to_string(iters) + ".png").c_str());
           image_error.save(string("error_" + std::to_string(i) + "_" + std::to_string(iters) + ".png").c_str());
         }
-
       } // [Shape from shading] main loop
+
+      // Depth recovery
+      vector<cv::Mat> depth_maps(num_images);
+      {
+        // [Depth recovery] step 1: prepare depth map and LoG of depth map
+        cv::Mat depth_map_i(num_cols, num_rows), depth_map_LoG_i;
+
+        // render the original mesh to obtain depth map
+
+        cv::filter2D(depth_map_i, depth_map_LoG_i, -1, LoG_kernel, cv::Point(-1, -1), 0, cv::BORDER_REPLICATE);
+
+        // [Depth recovery] step 2: assemble matrices
+
+        // find valid pixels
+
+        // part 1: normal constraints
+
+        // part 2: LoG constaints
+
+        // part 3: difference constaints
+
+        // [Depth recovery] step 3: solve linear least sqaures and generate point cloud / mesh
+      }
 
     } // per-image shape estimation
 
