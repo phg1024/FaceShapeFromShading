@@ -200,7 +200,6 @@ int main(int argc, char **argv) {
       visualizer.SetCameraParameters(bundle.params.params_cam);
       visualizer.SetMeshRotationTranslation(bundle.params.params_model.R, bundle.params.params_model.T);
       QImage img = visualizer.Render();
-
       img.save("mesh.png");
 
       // find the visible triangles from the index map
@@ -292,11 +291,14 @@ int main(int argc, char **argv) {
     vector<cv::Mat> normal_maps_ref(num_images);
     vector<cv::Mat> normal_maps_ref_LoG(num_images);
     vector<cv::Mat> normal_maps(num_images);
+    vector<cv::Mat> depth_maps_ref(num_images);
+    vector<cv::Mat> depth_maps_ref_LoG(num_images);
+    vector<cv::Mat> depth_maps(num_images);
     vector<cv::Mat> albedos_ref(num_images);
     vector<cv::Mat> albedos_ref_LoG(num_images);
     vector<cv::Mat> albedos(num_images);
 
-    // generate reference normal map
+    // generate reference normal map and depth map
     for(int i=0;i<num_images;++i) {
       auto& bundle = image_bundles[i];
       // get the geometry of the mesh, update normal
@@ -311,22 +313,79 @@ int main(int argc, char **argv) {
       visualizer.BindMesh(mesh);
       visualizer.SetCameraParameters(bundle.params.params_cam);
       visualizer.SetMeshRotationTranslation(bundle.params.params_model.R, bundle.params.params_model.T);
-      QImage img = visualizer.Render();
+      pair<QImage, vector<float>> img_and_depth = visualizer.RenderWithDepth();
+      QImage img = img_and_depth.first;
+      const vector<float>& depth = img_and_depth.second;
 
-      // copy to normal maps
+      // get camera parameters for computing actual z values
+      const double aspect_ratio =
+        bundle.params.params_cam.image_size.x / bundle.params.params_cam.image_size.y;
+
+      const double far = bundle.params.params_cam.far;
+      // near is the focal length
+      const double near = bundle.params.params_cam.focal_length;
+      const double top = near * tan(0.5 * bundle.params.params_cam.fovy);
+      const double right = top * aspect_ratio;
+      glm::dmat4 Mproj = glm::dmat4(near/right, 0, 0, 0,
+                                    0, near/top, 0, 0,
+                                    0, 0, -(far+near)/(far-near), -1,
+                                    0, 0, -2.0 * far * near / (far - near), 0.0);
+
+      glm::ivec4 viewport(0, 0, bundle.image.width(), bundle.image.height());
+
+      glm::dmat4 Rmat = glm::eulerAngleYXZ(bundle.params.params_model.R[0],
+                                           bundle.params.params_model.R[1],
+                                           bundle.params.params_model.R[2]);
+
+      glm::dmat4 Tmat = glm::translate(glm::dmat4(1.0),
+                                       glm::dvec3(bundle.params.params_model.T[0],
+                                                  bundle.params.params_model.T[1],
+                                                  bundle.params.params_model.T[2]));
+      glm::dmat4 Mview = Tmat * Rmat;
+
+      // copy to normal maps and depth maps
       normal_maps_ref[i] = cv::Mat(img.height(), img.width(), CV_64FC3);
+      depth_maps_ref[i] = cv::Mat(img.height(), img.width(), CV_64F);
+      depth_maps[i] = cv::Mat(img.height(), img.width(), CV_64FC3);
+      QImage depth_img = img;
+      vector<glm::dvec3> point_cloud;
       for(int y=0;y<img.height();++y) {
         for(int x=0;x<img.width();++x) {
           auto pix = img.pixel(x, y);
           // 0~255 range
           normal_maps_ref[i].at<cv::Vec3d>(y, x) = cv::Vec3d(qRed(pix), qGreen(pix), qBlue(pix));
+
+          // get the screen z-value
+          double dvalue = depth[(img.height()-1-y)*img.width()+x];
+          if(dvalue < 1) {
+            // unproject this point to obtain the actual z value
+            glm::dvec3 XYZ = glm::unProject(glm::dvec3(x, y, dvalue), Mview, Mproj, viewport);
+            point_cloud.push_back(XYZ);
+            depth_maps_ref[i].at<double>(y, x) = dvalue;
+            depth_maps[i].at<cv::Vec3d>(y, x) = cv::Vec3d(x, y, dvalue);
+
+            depth_img.setPixel(x, y, qRgb(dvalue*255, 0, (1-dvalue)*255));
+          } else {
+            depth_img.setPixel(x, y, qRgb(255, 255, 255));
+            depth_maps_ref[i].at<double>(y, x) = -1e6;
+            depth_maps[i].at<cv::Vec3d>(y, x) = cv::Vec3d(0, 0, -1e6);
+          }
         }
       }
-
-      img.save(string("normal" + std::to_string(i) + ".png").c_str());
-
       // convert back to [-1, 1] range
       normal_maps_ref[i] = (normal_maps_ref[i] / 255.0) * 2.0 - 1.0;
+
+      img.save(string("normal" + std::to_string(i) + ".png").c_str());
+      depth_img.save(string("depth" + std::to_string(i) + ".png").c_str());
+
+      // Write out the initial point cloud
+      {
+        ofstream fout("point_cloud" + std::to_string(i) + ".txt");
+        for(auto p : point_cloud) {
+          fout << p.x << ' ' << p.y << ' ' << p.z << endl;
+        }
+        fout.close();
+      }
     }
     // make a copy, use it as initial value
     normal_maps = normal_maps_ref;
@@ -349,7 +408,8 @@ int main(int argc, char **argv) {
       visualizer.BindTexture(mean_texture_image);
       visualizer.SetCameraParameters(bundle.params.params_cam);
       visualizer.SetMeshRotationTranslation(bundle.params.params_model.R, bundle.params.params_model.T);
-      QImage img = visualizer.Render();
+
+      //QImage img = visualizer.Render();
 
       QImage albedo_image = visualizer.Render(true);
 
@@ -573,7 +633,8 @@ int main(int argc, char **argv) {
                 Y_ij(8) = 3 * nz * nz - 1;
 
                 double LdotY = l_i.transpose() * Y_ij;
-                cv::Vec3d rho = albedos[i].at<cv::Vec3d>(y, x) * 255.0 * LdotY;
+                cv::Vec3d rho(0.5, 0.5, 0.5);
+                rho *= 255.0 * LdotY;
 
                 image_with_lighting.setPixel(x, y, qRgb(clamp<double>(rho[0], 0, 255),
                                                         clamp<double>(rho[1], 0, 255),
@@ -587,7 +648,7 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 25.0 / (iters + 1);
+          const double lambda2 = 50.0 / (iters + 1);
 
           // ====================================================================
           // collect valid pixels
@@ -699,7 +760,7 @@ int main(int argc, char **argv) {
           // ====================================================================
           // solve linear least squares
           // ====================================================================
-          const double epsilon = 0.00001;
+          const double epsilon = 1e-4;
           Eigen::SparseMatrix<double> eye(num_constraints, num_constraints);
           for(int j=0;j<num_constraints;++j) eye.insert(j, j) = epsilon;
 
@@ -859,8 +920,8 @@ int main(int argc, char **argv) {
             phi(j) = acos(ny);
           }
 
-          const double w_reg = 1.0;
-          const double w_integrability = 0.00001;
+          const double w_reg = 0.25;
+          const double w_integrability = 0.0005;
 
           #define USE_ANALYTIC_COST_FUNCTIONS 1
           PhGUtils::message("Assembling cost functions ...");
@@ -890,7 +951,6 @@ int main(int argc, char **argv) {
               problem.AddResidualBlock(cost_function, NULL, theta.data()+j, phi.data()+j);
             }
 
-            // @TODO debug integrability term
             // integrability term
             for(int j = 0; j < num_constraints; ++j) {
               int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
@@ -979,6 +1039,7 @@ int main(int argc, char **argv) {
           }
 
           // update normal map
+          cv::Mat normal_map_blurred(num_rows, num_cols, CV_32FC3);
           for(int j=0;j<num_constraints;++j) {
             int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
             int pidx = r * num_cols + c;
@@ -991,7 +1052,20 @@ int main(int argc, char **argv) {
             double ny = cos(phi(j));
             double nz = cos(theta(j)) * sin(phi(j));
 
-            normal_maps[i].at<cv::Vec3d>(r, c) = cv::Vec3d(nx, ny, nz);
+            normal_map_blurred.at<cv::Vec3f>(r, c) = cv::Vec3f(nx, ny, nz);
+          }
+
+          #if 0
+          if(iters < max_iters - 1) {
+            cv::medianBlur(normal_map_blurred, normal_map_blurred, 3);
+          }
+          #endif
+
+          for(int j=0;j<num_constraints;++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+            int pidx = r * num_cols + c;
+            cv::Vec3f pix_j = normal_map_blurred.at<cv::Vec3f>(r, c);
+            normal_maps[i].at<cv::Vec3d>(r, c) = cv::Vec3d(pix_j[0], pix_j[1], pix_j[2]);
           }
 
           PhGUtils::message("done.");
@@ -1054,28 +1128,208 @@ int main(int argc, char **argv) {
       } // [Shape from shading] main loop
 
       // Depth recovery
-      vector<cv::Mat> depth_maps(num_images);
       {
+        PhGUtils::message("[Shape from shading] Depth recovery.");
+        const int num_cols = bundle.image.width(), num_rows = bundle.image.height();
+
         // [Depth recovery] step 1: prepare depth map and LoG of depth map
-        cv::Mat depth_map_i(num_cols, num_rows), depth_map_LoG_i;
+        cv::Mat depth_map_i = depth_maps_ref[i], depth_map_LoG_i;
 
         // render the original mesh to obtain depth map
-
         cv::filter2D(depth_map_i, depth_map_LoG_i, -1, LoG_kernel, cv::Point(-1, -1), 0, cv::BORDER_REPLICATE);
 
         // [Depth recovery] step 2: assemble matrices
 
-        // find valid pixels
+        // ====================================================================
+        // collect valid pixels
+        // ====================================================================
+        vector<glm::ivec2> pixel_indices_i;
 
+        const int wsize = 2;
+        for (int y = wsize; y < num_rows-wsize; ++y) {
+          for (int x = wsize; x < num_cols-wsize; ++x) {
+
+            bool valid = true;
+            for(int dr=-wsize;dr<=wsize;++dr) {
+              for(int dc=-wsize;dc<=wsize;++dc) {
+                valid &= depth_map_i.at<double>(y+dr, x+dc) > -1e5;
+              }
+            }
+            if (valid) {
+              pixel_indices_i.push_back(glm::ivec2(y, x));
+            }
+          }
+        }
+
+        const int num_constraints = pixel_indices_i.size();
+
+        vector<bool> is_valid_pixel(num_rows*num_cols, false);
+        vector<int> pixel_index_map(num_rows*num_cols, -1);
+        for(int j=0;j<num_constraints;++j) {
+          int pidx = pixel_indices_i[j].x * num_cols + pixel_indices_i[j].y;
+          is_valid_pixel[pidx] = true;
+          pixel_index_map[pidx] = j;
+        }
+
+        PhGUtils::message("[Shape from shading] Depth recovery: assembling matrix.");
+        vector<Tripletd> A_coeffs;
+        VectorXd B(num_constraints * 4);
+        const double w_LoG = 1.0, w_diff = 0.1;
+        // ====================================================================
         // part 1: normal constraints
+        // ====================================================================
+        for(int j=0;j<num_constraints;++j) {
+          int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+          int pidx = r * num_cols + c;
 
+          cv::Vec3d normal_ij = normal_maps[i].at<cv::Vec3d>(r, c);
+          cv::Vec3d depth_ij = depth_maps[i].at<cv::Vec3d>(r, c);
+          double nx = normal_ij[0], ny = normal_ij[1], nz = normal_ij[2];
+
+          if(r > 0 && r < num_rows - 1) {
+            int pidx_u = pidx - num_cols;
+            cv::Vec3d depth_ij_u = depth_maps[i].at<cv::Vec3d>(r-1, c);
+            if(is_valid_pixel[pidx_u]) {
+              A_coeffs.push_back(Tripletd(j*2, j, -nz));
+              A_coeffs.push_back(Tripletd(j*2, pixel_index_map[pidx_u], nz));
+              B(j*2) = ny;
+            }
+          }
+
+          if(c > 0 && c < num_cols - 1) {
+            int pidx_l = pidx - 1;
+            cv::Vec3d depth_ij_l = depth_maps[i].at<cv::Vec3d>(r, c-1);
+            if(is_valid_pixel[pidx_l]) {
+              A_coeffs.push_back(Tripletd(j*2+1, j, nz));
+              A_coeffs.push_back(Tripletd(j*2+1, pixel_index_map[pidx_l], -nz));
+              B(j*2+1) = nx;
+            }
+          }
+        }
+        cout << "part 1 done." << endl;
+
+        // ====================================================================
         // part 2: LoG constaints
+        // ====================================================================
+        for(int j=0;j<LoG_coeffs.size();++j) {
+            auto& item_j = LoG_coeffs[j];
+            if(is_valid_pixel[item_j.row()] && is_valid_pixel[item_j.col()]) {
+              int new_i = pixel_index_map[item_j.row()] + num_constraints * 2;
+              int new_j = pixel_index_map[item_j.col()];
+              A_coeffs.push_back(Tripletd(new_i, new_j, item_j.value() * w_LoG));
+              int rj = item_j.row() / num_cols;
+              int cj = item_j.row() % num_cols;
+              B(new_i) = depth_map_LoG_i.at<double>(rj, cj) * w_LoG;
+            }
+        }
+        cout << "part 2 done." << endl;
 
+        // ====================================================================
         // part 3: difference constaints
+        // ====================================================================
+        for(int j=0;j<num_constraints;++j) {
+          int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+          int pidx = r * num_cols + c;
+          int new_i = j + num_constraints * 3;
+          int new_j = j;
+          A_coeffs.push_back(Tripletd(new_i, new_j, w_diff));
+          B(new_i) = depth_map_i.at<double>(r, c) * w_diff;
+        }
+        cout << "part 3 done." << endl;
+
+        Eigen::SparseMatrix<double> A(num_constraints * 4, num_constraints);
+        A.setFromTriplets(A_coeffs.begin(), A_coeffs.end());
+        A.makeCompressed();
+
+        PhGUtils::message("done.");
 
         // [Depth recovery] step 3: solve linear least sqaures and generate point cloud / mesh
-      }
+        const double epsilon = 1e-4;
+        Eigen::SparseMatrix<double> eye(num_constraints, num_constraints);
+        for(int j=0;j<num_constraints;++j) eye.insert(j, j) = epsilon;
 
+        Eigen::SparseMatrix<double> AtA = (A.transpose() * A).pruned().eval();
+        AtA.makeCompressed();
+
+        cout << AtA.rows() << 'x' << AtA.cols() << endl;
+        cout << AtA.nonZeros() << endl;
+
+        AtA += eye;
+
+        // AtA is symmetric, so it is okay to use it as column major?
+        CholmodSupernodalLLT<Eigen::SparseMatrix<double>> solver;
+        solver.compute(AtA);
+        if(solver.info()!=Success) {
+          cerr << "Failed to decompose matrix A." << endl;
+          exit(-1);
+        }
+
+        VectorXd Atb = A.transpose() * B;
+        VectorXd new_depth = solver.solve(Atb);
+        if(solver.info()!=Success) {
+          cerr << "Failed to solve A\b." << endl;
+          exit(-1);
+        }
+        PhGUtils::message("solved.");
+
+        // update depth map
+        cv::Mat depth_map_final(num_rows, num_cols, CV_32F);
+        for(int j=0;j<num_constraints;++j) {
+          int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+          cv::Vec3d old_depth = depth_maps[i].at<cv::Vec3d>(r, c);
+          depth_maps[i].at<cv::Vec3d>(r, c) = cv::Vec3d(old_depth[0], old_depth[1], new_depth(j));
+          depth_map_final.at<float>(r, c) = new_depth(j);
+        }
+
+        // apply median filter to depth map
+        //cv::medianBlur(depth_map_final, depth_map_final, 3);
+
+        vector<glm::dvec3> depth_final;
+        for(int j=0;j<num_constraints;++j) {
+          int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+          cv::Vec3d old_depth = depth_maps[i].at<cv::Vec3d>(r, c);
+          float d_j = depth_map_final.at<float>(r, c);
+
+          //depth_final.push_back(glm::vec3(old_depth[0], old_depth[1], d_j));
+          depth_final.push_back(glm::dvec3(c, r, d_j));
+        }
+
+        // write out the new depth map
+        {
+          // get camera parameters for computing actual z values
+          const double aspect_ratio =
+            bundle.params.params_cam.image_size.x / bundle.params.params_cam.image_size.y;
+
+          const double far = bundle.params.params_cam.far;
+          // near is the focal length
+          const double near = bundle.params.params_cam.focal_length;
+          const double top = near * tan(0.5 * bundle.params.params_cam.fovy);
+          const double right = top * aspect_ratio;
+          glm::dmat4 Mproj = glm::dmat4(near/right, 0, 0, 0,
+                                        0, near/top, 0, 0,
+                                        0, 0, -(far+near)/(far-near), -1,
+                                        0, 0, -2.0 * far * near / (far - near), 0.0);
+
+          glm::ivec4 viewport(0, 0, bundle.image.width(), bundle.image.height());
+
+          glm::dmat4 Rmat = glm::eulerAngleYXZ(bundle.params.params_model.R[0],
+                                               bundle.params.params_model.R[1],
+                                               bundle.params.params_model.R[2]);
+
+          glm::dmat4 Tmat = glm::translate(glm::dmat4(1.0),
+                                           glm::dvec3(bundle.params.params_model.T[0],
+                                                      bundle.params.params_model.T[1],
+                                                      bundle.params.params_model.T[2]));
+          glm::dmat4 Mview = Tmat * Rmat;
+
+          ofstream fout("point_cloud_opt" + std::to_string(i) + ".txt");
+          for(auto p : depth_final) {
+            glm::dvec3 XYZ = glm::unProject(p, Mview, Mproj, viewport);
+            fout << XYZ.x << ' ' << XYZ.y << ' ' << XYZ.z << endl;
+          }
+          fout.close();
+        }
+      }
     } // per-image shape estimation
 
   } // [Shape from shading]

@@ -53,7 +53,7 @@ void OffscreenMeshVisualizer::SetupViewing() const {
   }
 }
 
-QImage OffscreenMeshVisualizer::Render(bool multi_sampled) const {
+pair<QImage, vector<float>> OffscreenMeshVisualizer::RenderWithDepth(bool multi_sampled) const {
   boost::timer::auto_cpu_timer t("render time = %w seconds.\n");
   QSurfaceFormat format;
   format.setMajorVersion(3);
@@ -76,7 +76,7 @@ QImage OffscreenMeshVisualizer::Render(bool multi_sampled) const {
   // Disable sampling to avoid blending along edges
   if(multi_sampled) fboFormat.setSamples(16);
   else fboFormat.setSamples(0);
-  fboFormat.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+  fboFormat.setAttachment(QOpenGLFramebufferObject::Depth);
 
   QOpenGLFramebufferObject fbo(drawRectSize, fboFormat);
   fbo.bind();
@@ -164,7 +164,7 @@ QImage OffscreenMeshVisualizer::Render(bool multi_sampled) const {
       break;
     }
     case Normal: {
-      PhGUtils::message("rendering mesh.");
+      PhGUtils::message("rendering normals.");
       for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
         auto normal_i = mesh.normal(face_i);
         auto f = mesh.face(face_i);
@@ -192,7 +192,7 @@ QImage OffscreenMeshVisualizer::Render(bool multi_sampled) const {
       break;
     }
     case TexturedMesh: {
-      PhGUtils::message("rendering mesh.");
+      PhGUtils::message("rendering textured mesh.");
       glEnable(GL_TEXTURE);
 
       GLuint image_tex;
@@ -232,8 +232,33 @@ QImage OffscreenMeshVisualizer::Render(bool multi_sampled) const {
     }
   }
 
+  // get the depth buffer
+  auto dump_buffer = [](const string filename, int w, int h, const char* ptr, size_t sz) {
+    ofstream fout(filename);
+    int dsize[2] = {w, h};
+    fout.write(reinterpret_cast<const char*>(&dsize[0]), sizeof(int)*2);
+    fout.write(ptr, sz*w*h);
+    fout.close();
+  };
+
+  /*
+  vector<unsigned char> color_buffer(width * height * 3);
+  glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, &(color_buffer[0]));
+  dump_buffer("color.bin", width, height, (const char*)color_buffer.data(), sizeof(unsigned char)*3);
+  */
+
+  vector<float> depth_buffer(width*height, 0);
+  glReadPixels(0, 0, width, height, GL_DEPTH_COMPONENT, GL_FLOAT, &(depth_buffer[0]));
+  dump_buffer("depth.bin", width, height, (const char*)depth_buffer.data(), sizeof(float));
+
   // get the bitmap and save it as an image
   QImage img = fbo.toImage();
+
   fbo.release();
-  return img;
+  return make_pair(img, depth_buffer);
+}
+
+QImage OffscreenMeshVisualizer::Render(bool multi_sampled) const {
+  auto res = RenderWithDepth(multi_sampled);
+  return res.first;
 }

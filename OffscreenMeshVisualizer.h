@@ -50,6 +50,7 @@ public:
   }
 
   QImage Render(bool multi_sampled=false) const;
+  pair<QImage, vector<float>> RenderWithDepth(bool multi_sampled=false) const;
 
 protected:
   void SetupViewing() const;

@@ -192,15 +192,12 @@ struct NormalMapIntegrabilityTerm {
     double nx_u = sin(theta_u) * sin(phi_u);
     double ny_u= cos(phi_u);
 
-#if 0
-    const double epsilon = 1e-3;
-    double nxnz = safe_division(nx, nz, epsilon);
-    double nynz = safe_division(ny, nz, epsilon);
+#if 1
+    double nz2 = nz * nz + 1e-3;
+    double part1 = nz * (nx_u - nx) - (nz_u - nz) * nx;
+    double part2 = nz * (ny - ny_l) - (nz - nz_l) * ny;
 
-    double nynz_l = safe_division(ny_l, nz_l, epsilon);
-    double nxnz_u = safe_division(nx_u, nz_u, epsilon);
-
-    residuals[0] = ((nxnz_u - nxnz) - (nynz - nynz_l)) * 0.5 * weight;
+    residuals[0] = (part1 + part2) / nz2 * weight;
 #else
     Vector3d n(nx, ny, nz);
     Vector3d nu(nx_u, ny_u, nz_u);
@@ -208,13 +205,14 @@ struct NormalMapIntegrabilityTerm {
     Vector3d dndy = nu - n;
     Vector3d dndx = n - nl;
 
-    if(fabs(nz) < 1e-3) {
-      nz = (nz < 0)?-1e-3:1e-3;
+    const double nz_cutoff = 1e-3;
+    if(fabs(nz) < nz_cutoff) {
+      nz = (nz < 0)?-nz_cutoff:nz_cutoff;
     }
-    double nz2 = (nz * nz + 1e-5);
+    double nz2 = (nz * nz + 1e-3);
 
     const Vector3d xvec(1, 0, 0), yvec(0, 1, 0);
-    residuals[0] = -n.dot(dndy.cross(yvec)+dndx.cross(xvec)) / nz2 * 0.5 * weight;
+    residuals[0] = n.dot(dndy.cross(yvec)+dndx.cross(xvec)) / nz2 * weight;
 #endif
 
     return true;
@@ -258,8 +256,8 @@ struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
     double nx_u = sin(theta_u) * sin(phi_u);
     double ny_u = cos(phi_u);
 
-#if 0
     const double epsilon = 1e-5;
+#if 0
     double nxnz = safe_division(nx, nz, epsilon);
     double nynz = safe_division(ny, nz, epsilon);
 
