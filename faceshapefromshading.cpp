@@ -1176,7 +1176,7 @@ int main(int argc, char **argv) {
         PhGUtils::message("[Shape from shading] Depth recovery: assembling matrix.");
         vector<Tripletd> A_coeffs;
         VectorXd B(num_constraints * 4);
-        const double w_LoG = 0.1, w_diff = 0.001;
+        const double w_LoG = 0.1, w_diff = 0.1;
         // ====================================================================
         // part 1: normal constraints
         // ====================================================================
