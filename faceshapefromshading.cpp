@@ -360,9 +360,10 @@ int main(int argc, char **argv) {
           if(dvalue < 1) {
             // unproject this point to obtain the actual z value
             glm::dvec3 XYZ = glm::unProject(glm::dvec3(x, y, dvalue), Mview, Mproj, viewport);
-            point_cloud.push_back(XYZ);
-            depth_maps_ref[i].at<double>(y, x) = dvalue;
-            depth_maps[i].at<cv::Vec3d>(y, x) = cv::Vec3d(x, y, dvalue);
+            glm::dvec4 Rxyz = Rmat * glm::dvec4(XYZ.x, XYZ.y, XYZ.z, 1);
+            point_cloud.push_back(glm::dvec3(Rxyz.x, Rxyz.y, Rxyz.z));
+            depth_maps_ref[i].at<double>(y, x) = Rxyz.z;
+            depth_maps[i].at<cv::Vec3d>(y, x) = cv::Vec3d(Rxyz.x, Rxyz.y, Rxyz.z);
 
             depth_img.setPixel(x, y, qRgb(dvalue*255, 0, (1-dvalue)*255));
           } else {
@@ -648,7 +649,7 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 50.0 / (iters + 1);
+          const double lambda2 = 25.0 / (iters + 1);
 
           // ====================================================================
           // collect valid pixels
@@ -760,7 +761,7 @@ int main(int argc, char **argv) {
           // ====================================================================
           // solve linear least squares
           // ====================================================================
-          const double epsilon = 1e-4;
+          const double epsilon = 1e-8;
           Eigen::SparseMatrix<double> eye(num_constraints, num_constraints);
           for(int j=0;j<num_constraints;++j) eye.insert(j, j) = epsilon;
 
@@ -920,8 +921,8 @@ int main(int argc, char **argv) {
             phi(j) = acos(ny);
           }
 
-          const double w_reg = 0.25;
-          const double w_integrability = 0.0005;
+          const double w_reg = 0.01;
+          const double w_integrability = 0.0001;
 
           #define USE_ANALYTIC_COST_FUNCTIONS 1
           PhGUtils::message("Assembling cost functions ...");
@@ -931,7 +932,8 @@ int main(int argc, char **argv) {
 
             // data term
             for(int j = 0; j < num_constraints; ++j) {
-              #if USE_ANALYTIC_COST_FUNCTIONS
+              //#if USE_ANALYTIC_COST_FUNCTIONS
+              #if 0
               ceres::CostFunction *cost_function =
                 new NormalMapDataTerm_analytic(pixels_i(j, 0), pixels_i(j, 1), pixels_i(j, 2),
                                                albedos_i(j, 0), albedos_i(j, 1), albedos_i(j, 2),
@@ -1174,7 +1176,7 @@ int main(int argc, char **argv) {
         PhGUtils::message("[Shape from shading] Depth recovery: assembling matrix.");
         vector<Tripletd> A_coeffs;
         VectorXd B(num_constraints * 4);
-        const double w_LoG = 1.0, w_diff = 0.1;
+        const double w_LoG = 0.1, w_diff = 0.001;
         // ====================================================================
         // part 1: normal constraints
         // ====================================================================
@@ -1188,21 +1190,34 @@ int main(int argc, char **argv) {
 
           if(r > 0 && r < num_rows - 1) {
             int pidx_u = pidx - num_cols;
+            //int pidx_d = pidx + num_cols;
             cv::Vec3d depth_ij_u = depth_maps[i].at<cv::Vec3d>(r-1, c);
-            if(is_valid_pixel[pidx_u]) {
+            //cv::Vec3d depth_ij_d = depth_maps[i].at<cv::Vec3d>(r+1, c);
+            if(is_valid_pixel[pidx_u] ) {
+              //&& is_valid_pixel[pidx_d]) {
               A_coeffs.push_back(Tripletd(j*2, j, -nz));
               A_coeffs.push_back(Tripletd(j*2, pixel_index_map[pidx_u], nz));
-              B(j*2) = ny;
+              //A_coeffs.push_back(Tripletd(j*2, pixel_index_map[pidx_d], -nz));
+              B(j*2) = ny * (depth_ij_u[1] - depth_ij[1]);
+              //B(j*2) = ny;
             }
           }
 
           if(c > 0 && c < num_cols - 1) {
             int pidx_l = pidx - 1;
+            //int pidx_r = pidx + 1;
             cv::Vec3d depth_ij_l = depth_maps[i].at<cv::Vec3d>(r, c-1);
-            if(is_valid_pixel[pidx_l]) {
+            //cv::Vec3d depth_ij_r = depth_maps[i].at<cv::Vec3d>(r, c+1);
+            if(is_valid_pixel[pidx_l] ){
+              //&& is_valid_pixel[pidx_r]) {
               A_coeffs.push_back(Tripletd(j*2+1, j, nz));
               A_coeffs.push_back(Tripletd(j*2+1, pixel_index_map[pidx_l], -nz));
-              B(j*2+1) = nx;
+              //A_coeffs.push_back(Tripletd(j*2+1, pixel_index_map[pidx_r], nz));
+
+              // this negative here is critical for aligning the point cloud correctly
+              // with the reference mesh
+              B(j*2+1) = -nx * (depth_ij[0] - depth_ij_l[0]);
+              //B(j*2+1) = nx;
             }
           }
         }
@@ -1244,9 +1259,8 @@ int main(int argc, char **argv) {
         PhGUtils::message("done.");
 
         // [Depth recovery] step 3: solve linear least sqaures and generate point cloud / mesh
-        const double epsilon = 1e-4;
         Eigen::SparseMatrix<double> eye(num_constraints, num_constraints);
-        for(int j=0;j<num_constraints;++j) eye.insert(j, j) = epsilon;
+        for(int j=0;j<num_constraints;++j) eye.insert(j, j) = 1e-8;
 
         Eigen::SparseMatrix<double> AtA = (A.transpose() * A).pruned().eval();
         AtA.makeCompressed();
@@ -1261,6 +1275,15 @@ int main(int argc, char **argv) {
         solver.compute(AtA);
         if(solver.info()!=Success) {
           cerr << "Failed to decompose matrix A." << endl;
+
+          {
+            ofstream fout("A.txt");
+            for(auto tt : A_coeffs) {
+              fout << tt.row() << ' ' << tt.col() << ' ' << tt.value() << endl;
+            }
+            fout.close();
+          }
+
           exit(-1);
         }
 
@@ -1290,42 +1313,15 @@ int main(int argc, char **argv) {
           cv::Vec3d old_depth = depth_maps[i].at<cv::Vec3d>(r, c);
           float d_j = depth_map_final.at<float>(r, c);
 
-          //depth_final.push_back(glm::vec3(old_depth[0], old_depth[1], d_j));
-          depth_final.push_back(glm::dvec3(c, r, d_j));
+          depth_final.push_back(glm::vec3(old_depth[0], old_depth[1], d_j));
+          //depth_final.push_back(glm::vec3(c, r, d_j));
         }
 
         // write out the new depth map
         {
-          // get camera parameters for computing actual z values
-          const double aspect_ratio =
-            bundle.params.params_cam.image_size.x / bundle.params.params_cam.image_size.y;
-
-          const double far = bundle.params.params_cam.far;
-          // near is the focal length
-          const double near = bundle.params.params_cam.focal_length;
-          const double top = near * tan(0.5 * bundle.params.params_cam.fovy);
-          const double right = top * aspect_ratio;
-          glm::dmat4 Mproj = glm::dmat4(near/right, 0, 0, 0,
-                                        0, near/top, 0, 0,
-                                        0, 0, -(far+near)/(far-near), -1,
-                                        0, 0, -2.0 * far * near / (far - near), 0.0);
-
-          glm::ivec4 viewport(0, 0, bundle.image.width(), bundle.image.height());
-
-          glm::dmat4 Rmat = glm::eulerAngleYXZ(bundle.params.params_model.R[0],
-                                               bundle.params.params_model.R[1],
-                                               bundle.params.params_model.R[2]);
-
-          glm::dmat4 Tmat = glm::translate(glm::dmat4(1.0),
-                                           glm::dvec3(bundle.params.params_model.T[0],
-                                                      bundle.params.params_model.T[1],
-                                                      bundle.params.params_model.T[2]));
-          glm::dmat4 Mview = Tmat * Rmat;
-
           ofstream fout("point_cloud_opt" + std::to_string(i) + ".txt");
           for(auto p : depth_final) {
-            glm::dvec3 XYZ = glm::unProject(p, Mview, Mproj, viewport);
-            fout << XYZ.x << ' ' << XYZ.y << ' ' << XYZ.z << endl;
+            fout << p.x << ' ' << p.y << ' ' << p.z << endl;
           }
           fout.close();
         }

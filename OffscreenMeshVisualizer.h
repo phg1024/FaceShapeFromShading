@@ -65,6 +65,7 @@ private:
 
   BasicMesh mesh;
   QImage texture;
+  mutable glm::dmat4 Mview;
 };
 
 

@@ -47,6 +47,7 @@ void OffscreenMeshVisualizer::SetupViewing() const {
                                                   mesh_translation[2]));
 
       glm::dmat4 MV = Tmat * Rmat;
+      Mview = MV;
       glMatrixMode(GL_MODELVIEW);
       glLoadMatrixd(&MV[0][0]);
     }
@@ -170,9 +171,23 @@ pair<QImage, vector<float>> OffscreenMeshVisualizer::RenderWithDepth(bool multi_
         auto f = mesh.face(face_i);
         auto v0 = mesh.vertex(f[0]), v1 = mesh.vertex(f[1]), v2 = mesh.vertex(f[2]);
         auto n = mesh.normal(face_i);
-        Vector3d nv0 = (mesh.vertex_normal(f[0]) + Vector3d(1.0, 1.0, 1.0)) * 0.5;
-        Vector3d nv1 = (mesh.vertex_normal(f[1]) + Vector3d(1.0, 1.0, 1.0)) * 0.5;
-        Vector3d nv2 = (mesh.vertex_normal(f[2]) + Vector3d(1.0, 1.0, 1.0)) * 0.5;
+
+        // process the normal vectors
+        glm::dmat4 Mnormal = glm::transpose(glm::inverse(Mview));
+
+        Vector3d n00 = mesh.vertex_normal(f[0]);
+        Vector3d n10 = mesh.vertex_normal(f[1]);
+        Vector3d n20 = mesh.vertex_normal(f[2]);
+
+        glm::dvec4 n0(n00[0], n00[1], n00[2], 1);
+        glm::dvec4 n1(n10[0], n10[1], n10[2], 1);
+        glm::dvec4 n2(n20[0], n20[1], n20[2], 1);
+
+        n0 = Mnormal * n0; n1 = Mnormal * n1; n2 = Mnormal * n2;
+
+        Vector3d nv0 = Vector3d(n0.x + 1.0, n0.y + 1.0, n0.z + 1.0) * 0.5;
+        Vector3d nv1 = Vector3d(n1.x + 1.0, n1.y + 1.0, n1.z + 1.0) * 0.5;
+        Vector3d nv2 = Vector3d(n2.x + 1.0, n2.y + 1.0, n2.z + 1.0) * 0.5;
 
         glShadeModel(GL_SMOOTH);
 
