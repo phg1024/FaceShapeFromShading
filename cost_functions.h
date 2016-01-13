@@ -166,7 +166,7 @@ struct NormalMapDataTerm_analytic : public ceres::CostFunction {
 };
 
 struct NormalMapIntegrabilityTerm {
-  NormalMapIntegrabilityTerm(double weight) : weight(weight) {}
+  NormalMapIntegrabilityTerm(double dx, double dy, double weight) : weight(weight) {}
 
   double safe_division(double numer, double denom, double eps) const {
     if(fabs(denom) < eps) {
@@ -193,9 +193,9 @@ struct NormalMapIntegrabilityTerm {
     double ny_u= cos(phi_u);
 
 #if 1
-    double nz2 = nz * nz + 1e-4;
-    double part1 = nz * (nx_u - nx) - (nz_u - nz) * nx;
-    double part2 = nz * (ny - ny_l) - (nz - nz_l) * ny;
+    double nz2 = nz * nz + 1e-5;
+    double part1 = (nz * (nx_u - nx) - (nz_u - nz) * nx) * dy;
+    double part2 = (nz * (ny - ny_l) - (nz - nz_l) * ny) * dx;
 
     residuals[0] = (part1 - part2) / nz2 * weight;
 #else
@@ -218,6 +218,7 @@ struct NormalMapIntegrabilityTerm {
     return true;
   }
 
+  double dx, dy;
   double weight;
 };
 

@@ -278,13 +278,17 @@ int main(int argc, char **argv) {
     mean_texture_image = QImage(tex_size, tex_size, QImage::Format_ARGB32);
     mean_texture_image.fill(0);
     for(int i=0;i<tex_size;++i) {
-      for (int j = 0; j < tex_size; ++j) {
+      for (int j = 0; j < (tex_size/2); ++j) {
         double weight_ij = mean_texture_weight[i][j];
-        if(weight_ij == 0) continue;
+        double weight_ij_s = mean_texture_weight[i][tex_size-1-j];
+
+        if(weight_ij == 0 && weight_ij_s == 0) continue;
         else {
-          glm::dvec3 texel = mean_texture[i][j] / weight_ij;
+          glm::dvec3 texel = (mean_texture[i][j] + mean_texture[i][tex_size-1-j]) / (weight_ij + weight_ij_s);
           mean_texture[i][j] = texel;
+          mean_texture[i][tex_size-1-j] = texel;
           mean_texture_image.setPixel(j, i, qRgb(texel.r, texel.g, texel.b));
+          mean_texture_image.setPixel(tex_size-1-j, i, qRgb(texel.r, texel.g, texel.b));
         }
       }
     }
@@ -944,8 +948,7 @@ int main(int argc, char **argv) {
 
             // data term
             for(int j = 0; j < num_constraints; ++j) {
-              //#if USE_ANALYTIC_COST_FUNCTIONS
-              #if 0
+              #if USE_ANALYTIC_COST_FUNCTIONS
               ceres::CostFunction *cost_function =
                 new NormalMapDataTerm_analytic(pixels_i(j, 0), pixels_i(j, 1), pixels_i(j, 2),
                                                albedos_i(j, 0), albedos_i(j, 1), albedos_i(j, 2),
@@ -978,9 +981,19 @@ int main(int argc, char **argv) {
                 #if 0
                 ceres::CostFunction *cost_function = new NormalMapIntegrabilityTerm_analytic(w_integrability);
                 #else
+                cv::Vec3d depth_ij_l = depth_maps[i].at<cv::Vec3d>(r, c-1);
+                cv::Vec3d depth_ij_u = depth_maps[i].at<cv::Vec3d>(r-1, c);
+                cv::Vec3d depth_ij = depth_maps[i].at<cv::Vec3d>(r, c);
+
+                double dx = 0, dy = 0;
+                if(depth_ij[2] > -1e5 && depth_ij_l[2] > -1e5 && depth_ij_u[2] > -1e5) {
+                  dx = depth_ij[0] - depth_ij_l[0];
+                  dy = depth_ij_u[1] - depth_ij[1];
+                }
+
                 ceres::DynamicNumericDiffCostFunction<NormalMapIntegrabilityTerm> *cost_function =
                   new ceres::DynamicNumericDiffCostFunction<NormalMapIntegrabilityTerm>(
-                    new NormalMapIntegrabilityTerm(w_integrability)
+                    new NormalMapIntegrabilityTerm(dx, dy, w_integrability)
                   );
 
                 for(int param_i = 0; param_i < 6; ++param_i) cost_function->AddParameterBlock(1);
@@ -1188,7 +1201,7 @@ int main(int argc, char **argv) {
         PhGUtils::message("[Shape from shading] Depth recovery: assembling matrix.");
         vector<Tripletd> A_coeffs;
         VectorXd B(num_constraints * 4);
-        const double w_LoG = 0.075, w_diff = 0.075;
+        const double w_LoG = 0.1, w_diff = 0.05;
         // ====================================================================
         // part 1: normal constraints
         // ====================================================================
