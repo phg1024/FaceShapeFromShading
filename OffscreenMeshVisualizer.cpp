@@ -102,10 +102,17 @@ pair<QImage, vector<float>> OffscreenMeshVisualizer::RenderWithDepth(bool multi_
 
   SetupViewing();
 
+  if(faces_to_render.empty()) {
+    faces_to_render.resize(mesh.NumFaces());
+    for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
+      faces_to_render[face_i] = face_i;
+    }
+  }
+
   switch(render_mode) {
     case Texture: {
       PhGUtils::message("rendering texture.");
-      for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
+      for(int face_i : faces_to_render) {
         auto normal_i = mesh.normal(face_i);
         auto f = mesh.face_texture(face_i);
         auto t0 = mesh.texture_coords(f[0]), t1 = mesh.texture_coords(f[1]), t2 = mesh.texture_coords(f[2]);
@@ -135,7 +142,7 @@ pair<QImage, vector<float>> OffscreenMeshVisualizer::RenderWithDepth(bool multi_
     }
     case Mesh: {
       PhGUtils::message("rendering mesh.");
-      for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
+      for(int face_i : faces_to_render) {
         auto normal_i = mesh.normal(face_i);
         auto f = mesh.face(face_i);
         auto v0 = mesh.vertex(f[0]), v1 = mesh.vertex(f[1]), v2 = mesh.vertex(f[2]);
@@ -166,7 +173,7 @@ pair<QImage, vector<float>> OffscreenMeshVisualizer::RenderWithDepth(bool multi_
     }
     case Normal: {
       PhGUtils::message("rendering normals.");
-      for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
+      for(int face_i : faces_to_render) {
         auto normal_i = mesh.normal(face_i);
         auto f = mesh.face(face_i);
         auto v0 = mesh.vertex(f[0]), v1 = mesh.vertex(f[1]), v2 = mesh.vertex(f[2]);
@@ -222,7 +229,7 @@ pair<QImage, vector<float>> OffscreenMeshVisualizer::RenderWithDepth(bool multi_
 
       glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 
-      for(int face_i = 0; face_i < mesh.NumFaces(); ++face_i) {
+      for(int face_i : faces_to_render) {
         auto normal_i = mesh.normal(face_i);
         auto f = mesh.face(face_i);
         auto v0 = mesh.vertex(f[0]), v1 = mesh.vertex(f[1]), v2 = mesh.vertex(f[2]);
@@ -248,6 +255,7 @@ pair<QImage, vector<float>> OffscreenMeshVisualizer::RenderWithDepth(bool multi_
   }
 
   // get the depth buffer
+  /*
   auto dump_buffer = [](const string filename, int w, int h, const char* ptr, size_t sz) {
     ofstream fout(filename);
     int dsize[2] = {w, h};
@@ -256,7 +264,6 @@ pair<QImage, vector<float>> OffscreenMeshVisualizer::RenderWithDepth(bool multi_
     fout.close();
   };
 
-  /*
   vector<unsigned char> color_buffer(width * height * 3);
   glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, &(color_buffer[0]));
   dump_buffer("color.bin", width, height, (const char*)color_buffer.data(), sizeof(unsigned char)*3);
@@ -264,7 +271,8 @@ pair<QImage, vector<float>> OffscreenMeshVisualizer::RenderWithDepth(bool multi_
 
   vector<float> depth_buffer(width*height, 0);
   glReadPixels(0, 0, width, height, GL_DEPTH_COMPONENT, GL_FLOAT, &(depth_buffer[0]));
-  dump_buffer("depth.bin", width, height, (const char*)depth_buffer.data(), sizeof(float));
+
+  //dump_buffer("depth.bin", width, height, (const char*)depth_buffer.data(), sizeof(float));
 
   // get the bitmap and save it as an image
   QImage img = fbo.toImage();

@@ -63,6 +63,7 @@ int main(int argc, char **argv) {
   const string exp_prior_filename("/home/phg/Data/Multilinear/blendshape_u_1_aug.tensor");
   const string template_mesh_filename("/home/phg/Data/Multilinear/template.obj");
   const string contour_points_filename("/home/phg/Data/Multilinear/contourpoints.txt");
+  const string valid_faces_indices_filename("/home/phg/Data/Multilinear/face_region_indices.txt");
   const string landmarks_filename("/home/phg/Data/Multilinear/landmarks_73.txt");
   const string albedo_index_map_filename("/home/phg/Data/Multilinear/albedo_index.png");
   const string albedo_pixel_map_filename("/home/phg/Data/Multilinear/albedo_pixel.png");
@@ -70,6 +71,14 @@ int main(int argc, char **argv) {
   BasicMesh mesh(template_mesh_filename);
   auto landmarks = LoadIndices(landmarks_filename);
   auto contour_indices = LoadContourIndices(contour_points_filename);
+
+  auto valid_faces_indices_quad = LoadIndices(valid_faces_indices_filename);
+  // @HACK each quad face is triangulated, so the indices change from i to [2*i, 2*i+1]
+  vector<int> valid_faces_indices;
+  for(auto fidx : valid_faces_indices_quad) {
+    valid_faces_indices.push_back(fidx*2);
+    valid_faces_indices.push_back(fidx*2+1);
+  }
 
   const int tex_size = 2048;
 
@@ -313,6 +322,8 @@ int main(int argc, char **argv) {
       visualizer.BindMesh(mesh);
       visualizer.SetCameraParameters(bundle.params.params_cam);
       visualizer.SetMeshRotationTranslation(bundle.params.params_model.R, bundle.params.params_model.T);
+      visualizer.SetFacesToRender(valid_faces_indices);
+
       pair<QImage, vector<float>> img_and_depth = visualizer.RenderWithDepth();
       QImage img = img_and_depth.first;
       const vector<float>& depth = img_and_depth.second;
@@ -409,6 +420,7 @@ int main(int argc, char **argv) {
       visualizer.BindTexture(mean_texture_image);
       visualizer.SetCameraParameters(bundle.params.params_cam);
       visualizer.SetMeshRotationTranslation(bundle.params.params_model.R, bundle.params.params_model.T);
+      visualizer.SetFacesToRender(valid_faces_indices);
 
       //QImage img = visualizer.Render();
 
@@ -761,7 +773,7 @@ int main(int argc, char **argv) {
           // ====================================================================
           // solve linear least squares
           // ====================================================================
-          const double epsilon = 1e-8;
+          const double epsilon = 1e-16;
           Eigen::SparseMatrix<double> eye(num_constraints, num_constraints);
           for(int j=0;j<num_constraints;++j) eye.insert(j, j) = epsilon;
 
@@ -1176,7 +1188,7 @@ int main(int argc, char **argv) {
         PhGUtils::message("[Shape from shading] Depth recovery: assembling matrix.");
         vector<Tripletd> A_coeffs;
         VectorXd B(num_constraints * 4);
-        const double w_LoG = 0.1, w_diff = 0.1;
+        const double w_LoG = 0.075, w_diff = 0.075;
         // ====================================================================
         // part 1: normal constraints
         // ====================================================================
@@ -1260,7 +1272,7 @@ int main(int argc, char **argv) {
 
         // [Depth recovery] step 3: solve linear least sqaures and generate point cloud / mesh
         Eigen::SparseMatrix<double> eye(num_constraints, num_constraints);
-        for(int j=0;j<num_constraints;++j) eye.insert(j, j) = 1e-8;
+        for(int j=0;j<num_constraints;++j) eye.insert(j, j) = 1e-16;
 
         Eigen::SparseMatrix<double> AtA = (A.transpose() * A).pruned().eval();
         AtA.makeCompressed();

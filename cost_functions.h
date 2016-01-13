@@ -193,7 +193,7 @@ struct NormalMapIntegrabilityTerm {
     double ny_u= cos(phi_u);
 
 #if 1
-    double nz2 = nz * nz + 1e-3;
+    double nz2 = nz * nz + 1e-4;
     double part1 = nz * (nx_u - nx) - (nz_u - nz) * nx;
     double part2 = nz * (ny - ny_l) - (nz - nz_l) * ny;
 

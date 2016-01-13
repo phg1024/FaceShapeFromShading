@@ -41,6 +41,9 @@ public:
   void SetCameraParameters(const CameraParameters& cam_params) {
     camera_params = cam_params;
   }
+  void SetFacesToRender(const vector<int>& indices) {
+    faces_to_render = indices;
+  }
 
   void SetRenderMode(RenderMode mode_in) {
     render_mode = mode_in;
@@ -62,6 +65,8 @@ private:
 
   Vector3d mesh_rotation, mesh_translation;
   CameraParameters camera_params;
+
+  mutable vector<int> faces_to_render;
 
   BasicMesh mesh;
   QImage texture;
