@@ -6,12 +6,12 @@
 #include "ceres/ceres.h"
 
 struct NormalMapDataTerm {
-  NormalMapDataTerm(int cons_idx,
-                    double Ir, double Ig, double Ib,
+  NormalMapDataTerm(double Ir, double Ig, double Ib,
                     double ar, double ag, double ab,
-                    const VectorXd& lighting_coeffs)
+                    const VectorXd& lighting_coeffs,
+                    double weight = 1.0)
     : cons_idx(cons_idx), Ir(Ir), Ig(Ig), Ib(Ib), ar(ar), ag(ag), ab(ab),
-      lighting_coeffs(lighting_coeffs) {}
+      lighting_coeffs(lighting_coeffs), weight(weight) {}
 
   ~NormalMapDataTerm() {}
 
@@ -20,13 +20,13 @@ struct NormalMapDataTerm {
 
     double theta = parameters[0][0], phi = parameters[1][0];
 
-    // ny = cos(phi)
-    // nx = sin(theta) * sin(phi)
-    // nz = cos(theta) * sin(phi)
+    // nx = cos(theta)
+    // ny = sin(theta) * cos(phi)
+    // nz = sin(theta) * sin(phi)
 
-    double nz = cos(theta) * sin(phi);
-    double nx = sin(theta) * sin(phi);
-    double ny = cos(phi);
+    double nx = cos(theta);
+    double ny = sin(theta) * cos(phi);
+    double nz = sin(theta) * sin(phi);
 
     VectorXd Y(num_dof);
     Y(0) = 1;
@@ -37,9 +37,9 @@ struct NormalMapDataTerm {
 
     double LdotY = lighting_coeffs.transpose() * Y;
 
-    residuals[0] = (Ir - ar * LdotY);
-    residuals[1] = (Ig - ag * LdotY);
-    residuals[2] = (Ib - ab * LdotY);
+    residuals[0] = (Ir - ar * LdotY) * weight;
+    residuals[1] = (Ig - ag * LdotY) * weight;
+    residuals[2] = (Ib - ab * LdotY) * weight;
 
     return true;
   }
@@ -47,6 +47,7 @@ struct NormalMapDataTerm {
   int cons_idx;
   double Ir, Ig, Ib, ar, ag, ab;
   VectorXd lighting_coeffs;
+  double weight;
 };
 
 struct NormalMapDataTerm_analytic : public ceres::CostFunction {
@@ -166,7 +167,7 @@ struct NormalMapDataTerm_analytic : public ceres::CostFunction {
 };
 
 struct NormalMapIntegrabilityTerm {
-  NormalMapIntegrabilityTerm(double dx, double dy, double weight) : weight(weight) {}
+  NormalMapIntegrabilityTerm(double dx, double dy, double weight) : dx(dx), dy(dy), weight(weight) {}
 
   double safe_division(double numer, double denom, double eps) const {
     if(fabs(denom) < eps) {
@@ -175,29 +176,44 @@ struct NormalMapIntegrabilityTerm {
     return numer / denom;
   }
 
+  double round_off(double val, double eps) const {
+    if(fabs(val) < eps) {
+      if(val < 0) return -eps;
+      else return eps;
+    } else return val;
+  }
+
   bool operator()(double const * const * parameters, double *residuals) const {
     double theta = parameters[0][0], phi = parameters[1][0];
     double theta_l = parameters[2][0], phi_l = parameters[3][0];
     double theta_u = parameters[4][0], phi_u = parameters[5][0];
 
-    double nz = cos(theta) * sin(phi);
-    double nx = sin(theta) * sin(phi);
-    double ny = cos(phi);
+    // nx = cos(theta)
+    // ny = sin(theta) * cos(phi)
+    // nz = sin(theta) * sin(phi)
 
-    double nz_l = cos(theta_l) * sin(phi_l);
-    double nx_l = sin(theta_l) * sin(phi_l);
-    double ny_l = cos(phi_l);
+    double nx = cos(theta);
+    double ny = sin(theta) * cos(phi);
+    double nz = sin(theta) * sin(phi);
 
-    double nz_u = cos(theta_u) * sin(phi_u);
-    double nx_u = sin(theta_u) * sin(phi_u);
-    double ny_u= cos(phi_u);
+    double nx_l = cos(theta_l);
+    double ny_l = sin(theta_l) * cos(phi_l);
+    double nz_l = sin(theta_l) * sin(phi_l);
+
+    double nx_u = cos(theta_u);
+    double ny_u = sin(theta_u) * cos(phi_u);
+    double nz_u = sin(theta_u) * sin(phi_u);
 
 #if 1
-    double nz2 = nz * nz + 1e-5;
-    double part1 = (nz * (nx_u - nx) - (nz_u - nz) * nx) * dy;
-    double part2 = (nz * (ny - ny_l) - (nz - nz_l) * ny) * dx;
+    if(weight == 0) residuals[0] = 0;
+    else {
+      double nxnz = nx / nz;
+      double nynz = ny / nz;
+      double nxnz_u = nx_u / nz_u;
+      double nynz_l = ny_l / nz_l;
 
-    residuals[0] = (part1 - part2) / nz2 * weight;
+      residuals[0] = (nxnz_u - nxnz - (nynz - nynz_l)) * weight;
+    }
 #else
     Vector3d n(nx, ny, nz);
     Vector3d nu(nx_u, ny_u, nz_u);
@@ -205,11 +221,7 @@ struct NormalMapIntegrabilityTerm {
     Vector3d dndy = nu - n;
     Vector3d dndx = n - nl;
 
-    const double nz_cutoff = 1e-3;
-    if(fabs(nz) < nz_cutoff) {
-      nz = (nz < 0)?-nz_cutoff:nz_cutoff;
-    }
-    double nz2 = (nz * nz + 1e-3);
+    double nz2 = nz * nz + 1e-16;
 
     const Vector3d xvec(1, 0, 0), yvec(0, 1, 0);
     residuals[0] = n.dot(dndy.cross(yvec)+dndx.cross(xvec)) / nz2 * weight;
