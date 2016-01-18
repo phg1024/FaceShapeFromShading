@@ -45,25 +45,30 @@ inline glm::dvec3 bilinear_sample(const QImage& img, double x, double y) {
   return glm::dvec3(r, g, b);
 }
 
-inline set<int> FindTrianglesIndices(const QImage& img) {
-  set<int> S;
+inline pair<set<int>, vector<int>> FindTrianglesIndices(const QImage& img) {
   int w = img.width(), h = img.height();
-  for(int i=0;i<h;++i) {
-    for(int j=0;j<w;++j) {
+  set<int> S;
+  vector<int> indices_map(w*h);
+  for(int i=0, pidx = 0;i<h;++i) {
+    for(int j=0;j<w;++j, ++pidx) {
       QRgb pix = img.pixel(j, i);
       unsigned char r = static_cast<unsigned char>(qRed(pix));
       unsigned char g = static_cast<unsigned char>(qGreen(pix));
       unsigned char b = static_cast<unsigned char>(qBlue(pix));
 
-      if(r == 0 && g == 0 && b == 0) continue;
+      if(r == 0 && g == 0 && b == 0) {
+        indices_map[pidx] = -1;
+        continue;
+      }
       else {
         int idx;
         decode_index(r, g, b, idx);
         S.insert(idx);
+        indices_map[pidx] = idx;
       }
     }
   }
-  return S;
+  return make_pair(S, indices_map);
 }
 
 inline MatrixXd ComputeLoGKernel(int k, double sigma) {

@@ -10,7 +10,7 @@ struct NormalMapDataTerm {
                     double ar, double ag, double ab,
                     const VectorXd& lighting_coeffs,
                     double weight = 1.0)
-    : cons_idx(cons_idx), Ir(Ir), Ig(Ig), Ib(Ib), ar(ar), ag(ag), ab(ab),
+    : Ir(Ir), Ig(Ig), Ib(Ib), ar(ar), ag(ag), ab(ab),
       lighting_coeffs(lighting_coeffs), weight(weight) {}
 
   ~NormalMapDataTerm() {}
@@ -44,7 +44,6 @@ struct NormalMapDataTerm {
     return true;
   }
 
-  int cons_idx;
   double Ir, Ig, Ib, ar, ag, ab;
   VectorXd lighting_coeffs;
   double weight;
@@ -53,8 +52,9 @@ struct NormalMapDataTerm {
 struct NormalMapDataTerm_analytic : public ceres::CostFunction {
   NormalMapDataTerm_analytic(double Ir, double Ig, double Ib,
                              double ar, double ag, double ab,
-                             const VectorXd& lighting_coeffs)
-    : Ir(Ir), Ig(Ig), Ib(Ib), ar(ar), ag(ag), ab(ab), lighting_coeffs(lighting_coeffs) {
+                             const VectorXd& lighting_coeffs,
+                             double weight = 1.0)
+    : Ir(Ir), Ig(Ig), Ib(Ib), ar(ar), ag(ag), ab(ab), lighting_coeffs(lighting_coeffs), weight(weight) {
 
     mutable_parameter_block_sizes()->clear();
     mutable_parameter_block_sizes()->push_back(1);
@@ -82,16 +82,22 @@ struct NormalMapDataTerm_analytic : public ceres::CostFunction {
 
   virtual bool Evaluate(double const *const *parameters,
                         double *residuals,
-                        double **jacobians) const {
+                        double **jacobians) const
+  {
     const int num_dof = 9;
 
     double theta = parameters[0][0], phi = parameters[1][0];
-    double sinTheta = sin(theta), cosTheta = cos(theta);
-    double sinPhi = sin(phi), cosPhi = cos(phi);
 
-    double nz = cosTheta * sinPhi;
-    double nx = sinTheta * sinPhi;
-    double ny = cosPhi;
+    // nx = cos(theta)
+    // ny = sin(theta) * cos(phi)
+    // nz = sin(theta) * sin(phi)
+
+    double cosTheta = cos(theta), sinTheta = sin(theta);
+    double cosPhi = cos(phi), sinPhi = sin(phi);
+
+    double nx = cosTheta;
+    double ny = sinTheta * cosPhi;
+    double nz = sinTheta * sinPhi;
 
     VectorXd Y(num_dof);
     Y(0) = 1;
@@ -101,10 +107,11 @@ struct NormalMapDataTerm_analytic : public ceres::CostFunction {
     Y(8) = 3.0 * nz * nz - 1.0;
 
     double LdotY = lighting_coeffs.transpose() * Y;
+    LdotY = max(LdotY, 0.0);
 
-    residuals[0] = Ir - ar * LdotY;
-    residuals[1] = Ig - ag * LdotY;
-    residuals[2] = Ib - ab * LdotY;
+    residuals[0] = (Ir - ar * LdotY) * weight;
+    residuals[1] = (Ig - ag * LdotY) * weight;
+    residuals[2] = (Ib - ab * LdotY) * weight;
 
     if (jacobians != NULL) {
       assert(jacobians[0] != NULL);
@@ -117,14 +124,14 @@ struct NormalMapDataTerm_analytic : public ceres::CostFunction {
       double cos2Theta = cos(2 * theta);
 
       dYdtheta(0) = 0;
-      dYdtheta(1) = cosTheta * sinPhi;
-      dYdtheta(2) = 0;
-      dYdtheta(3) = -sinTheta * sinPhi;
-      dYdtheta(4) = cosTheta * sinPhi * cosPhi;
-      dYdtheta(5) = cos2Theta * sinPhi * sinPhi;
-      dYdtheta(6) = -sinTheta * sinPhi * cosPhi;
-      dYdtheta(7) = sin2Theta * sinPhi * sinPhi;
-      dYdtheta(8) = -3 * sin2Theta * sinPhi * sinPhi;
+      dYdtheta(1) = -sinTheta;
+      dYdtheta(2) = cosTheta * cosPhi;
+      dYdtheta(3) = cosTheta * sinPhi;
+      dYdtheta(4) = cos2Theta * cosPhi;
+      dYdtheta(5) = cos2Theta * sinPhi;
+      dYdtheta(6) = sin2Theta * sinPhi * cosPhi;
+      dYdtheta(7) = -sin2Theta * ( 1 + cosPhi * cosPhi);
+      dYdtheta(8) = 3 * sin2Theta * sinPhi * sinPhi;
 
       VectorXd dYdphi(num_dof);
 
@@ -132,14 +139,14 @@ struct NormalMapDataTerm_analytic : public ceres::CostFunction {
       double cos2Phi = cos(2 * phi);
 
       dYdphi(0) = 0;
-      dYdphi(1) = sinTheta * cosPhi;
-      dYdphi(2) = -sinPhi;
-      dYdphi(3) = cosTheta * cosPhi;
-      dYdphi(4) = sinTheta * cos2Phi;
-      dYdphi(5) = sinTheta * cosTheta * sin2Phi;
-      dYdphi(6) = cosTheta * cos2Phi;
-      dYdphi(7) = (sinTheta * sinTheta + 1) * sin2Phi;
-      dYdphi(8) = 3 * cosTheta * cosTheta * sin2Phi;
+      dYdphi(1) = 0;
+      dYdphi(2) = -sinTheta * sinPhi;
+      dYdphi(3) = sinTheta * cosPhi;
+      dYdphi(4) = -sinTheta * cosTheta * sinPhi;
+      dYdphi(5) = sinTheta * cosTheta * cosPhi;
+      dYdphi(6) = sinTheta * sinTheta * cos2Phi;
+      dYdphi(7) = sinTheta * sinTheta * sin2Phi;
+      dYdphi(8) = 3 * sinTheta * sinTheta * sin2Phi;
 #else
       const double eps = 1e-6;
       VectorXd dYdtheta = ((computeY(theta+eps, phi) - Y)/eps).eval();
@@ -164,6 +171,7 @@ struct NormalMapDataTerm_analytic : public ceres::CostFunction {
 
   double Ir, Ig, Ib, ar, ag, ab;
   VectorXd lighting_coeffs;
+  double weight;
 };
 
 struct NormalMapIntegrabilityTerm {
@@ -207,12 +215,11 @@ struct NormalMapIntegrabilityTerm {
 #if 1
     if(weight == 0) residuals[0] = 0;
     else {
-      double nxnz = nx / nz;
-      double nynz = ny / nz;
-      double nxnz_u = nx_u / nz_u;
-      double nynz_l = ny_l / nz_l;
+      double nz2 = nz * nz + 1e-16;
+      double part1 = (nz * nx_u - nz_u * nx) * max(fabs(dy), 1e-8);
+      double part2 = (nz_l * ny - nz * ny_l) * max(fabs(dx), 1e-8);
 
-      residuals[0] = (nxnz_u - nxnz - (nynz - nynz_l)) * weight;
+      residuals[0] = (part1 - part2) / nz2 * weight;
     }
 #else
     Vector3d n(nx, ny, nz);
@@ -234,89 +241,145 @@ struct NormalMapIntegrabilityTerm {
   double weight;
 };
 
-// @FIXME Need to derive the Jacbians for the updated error formula
 struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
-  NormalMapIntegrabilityTerm_analytic(double weight) : weight(weight) {
+  NormalMapIntegrabilityTerm_analytic(double dx, double dy, double weight) : dx(dx), dy(dy), weight(weight) {
     mutable_parameter_block_sizes()->clear();
     for(int param_i=0;param_i<6;++param_i)
       mutable_parameter_block_sizes()->push_back(1);
     set_num_residuals(1);
   }
 
-  double safe_division(double numer, double denom, double eps) const {
-    if(fabs(denom) < eps) {
-      denom = (denom<0)?-eps:eps;
-    }
-    return numer / denom;
-  }
-
   virtual bool Evaluate(double const *const *parameters,
                         double *residuals,
-                        double **jacobians) const {
+                        double **jacobians) const
+  {
     double theta = parameters[0][0], phi = parameters[1][0];
     double theta_l = parameters[2][0], phi_l = parameters[3][0];
     double theta_u = parameters[4][0], phi_u = parameters[5][0];
 
-    double nz = cos(theta) * sin(phi);
-    double nx = sin(theta) * sin(phi);
-    double ny = cos(phi);
+    // nx = cos(theta)
+    // ny = sin(theta) * cos(phi)
+    // nz = sin(theta) * sin(phi)
 
-    double nz_l = cos(theta_l) * sin(phi_l);
-    double nx_l = sin(theta_l) * sin(phi_l);
-    double ny_l = cos(phi_l);
+    double nx = cos(theta);
+    double ny = sin(theta) * cos(phi);
+    double nz = sin(theta) * sin(phi);
 
-    double nz_u = cos(theta_u) * sin(phi_u);
-    double nx_u = sin(theta_u) * sin(phi_u);
-    double ny_u = cos(phi_u);
+    double nx_l = cos(theta_l);
+    double ny_l = sin(theta_l) * cos(phi_l);
+    double nz_l = sin(theta_l) * sin(phi_l);
 
-    const double epsilon = 1e-5;
-#if 0
-    double nxnz = safe_division(nx, nz, epsilon);
-    double nynz = safe_division(ny, nz, epsilon);
+    double nx_u = cos(theta_u);
+    double ny_u = sin(theta_u) * cos(phi_u);
+    double nz_u = sin(theta_u) * sin(phi_u);
 
-    double nynz_l = safe_division(ny_l, nz_l, epsilon);
-    double nxnz_u = safe_division(nx_u, nz_u, epsilon);
+    /*
+    double nxnz = nx / nz;
+    double nynz = ny / nz;
+    double nxnz_u = nx_u / nz_u;
+    double nynz_l = ny_l / nz_l;
 
-    residuals[0] = ((nxnz_u - nxnz) - (nynz - nynz_l)) * 0.5 * weight;
-#else
-    Vector3d n(nx, ny, nz);
-    Vector3d nu(nx_u, ny_u, nz_u);
-    Vector3d nl(nx_l, ny_l, nz_l);
-    Vector3d dndy = nu - n;
-    Vector3d dndx = n - nl;
+    residuals[0] = (nxnz_u - nxnz - (nynz - nynz_l)) * weight;
+    */
 
-    if(fabs(nz) < 1e-3) {
-      nz = (nz < 0)?-1e-3:1e-3;
-    }
-    double nz2 = (nz * nz + 1e-5);
+    double dnx_dtheta = -sin(theta);
+    double dny_dtheta = cos(theta) * cos(phi);
+    double dnz_dtheta = cos(theta) * sin(phi);
 
-    const Vector3d xvec(1, 0, 0), yvec(0, 1, 0);
-    residuals[0] = -n.dot(dndy.cross(yvec)+dndx.cross(xvec)) / nz2 * 0.5 * weight;
-#endif
+    double dnx_dphi = 0;
+    double dny_dphi = - sin(theta) * sin(phi);
+    double dnz_dphi = sin(theta) * cos(phi);
+
+    double nz2 = nz * nz;
+    double dnzdy = dnz_dtheta * (theta_u - theta) + dnz_dphi * (phi_u - phi);
+    double dnxdy = dnx_dtheta * (theta_u - theta);
+    double dnydx = dny_dtheta * (theta - theta_l) + dny_dphi * (phi - phi_l);
+    double dnzdx = dnz_dtheta * (theta - theta_l) + dnz_dphi * (phi - phi_l);
+    double Du = (nz * dnxdy - nx * dnzdy) * max(fabs(dy), 1e-8);
+    double Dl = (nz * dnydx - ny * dnzdx) * max(fabs(dx), 1e-8);
+
+    residuals[0] = (Du - Dl) / (nz2 + 1e-16) * weight;
 
     if (jacobians != NULL) {
       for(int param_i=0;param_i<6;++param_i) assert(jacobians[0] != NULL);
 
-      // @FIXME the jacobians below are incorrect
+      double nz4 = nz2 * nz2;
+      {
+        double dnx_dtheta = -sin(theta);
+        double dny_dtheta = cos(theta) * cos(phi);
+        double dnz_dtheta = cos(theta) * sin(phi);
 
-      // jacobians[0][0] = \frac{\partial E}{\partial \theta}
-      jacobians[0][0] = -safe_division(1 + sin(theta) * cos(phi), cos(theta) * cos(theta) * sin(phi), epsilon) * weight * 0.5;
-      // jacobians[1][0] = \frac{\partial E}{\partial \phi}
-      jacobians[1][0] = safe_division(1, cos(theta) * sin(phi) * sin(phi), epsilon) * weight * 0.5;
+        double dnx_dphi = 0;
+        double dny_dphi = - sin(theta) * sin(phi);
+        double dnz_dphi = sin(theta) * cos(phi);
 
-      // jacobians[2][0] = \frac{\partial E}{\partial \theta_l}
-      jacobians[2][0] = safe_division(sin(theta_l) * cos(phi_l), cos(theta_l) * cos(theta_l) * sin(phi_l), epsilon) * weight * 0.5;
-      // jacobians[3][0] = \frac{\partial E}{\partial \phi_l}
-      jacobians[3][0] = safe_division(1, cos(theta_l) * sin(phi_l) * sin(phi_l), epsilon) * weight * 0.5;
+        // jacobians[0][0] = \frac{\partial E}{\partial \theta}
+        double dDu_dtheta = nx_u * dnz_dtheta - nz_u * dnx_dtheta;
+        double dDl_dtheta = nz_l * dny_dtheta - ny_l * dnz_dtheta;
+        double dFdtheta_u = dDu_dtheta * nz2 - 2 * Du * nz * dnz_dtheta;
+        double dFdtheta_l = dDl_dtheta * nz2 - 2 * Dl * nz * dnz_dtheta;
+        jacobians[0][0] = (dFdtheta_u - dFdtheta_l) / (nz4 + 1e-16) * weight;
 
-      // jacobians[4][0] = \frac{\partial E}{\partial \theta_u}
-      jacobians[4][0] = safe_division(1, cos(theta_u) * cos(theta_u), epsilon) * weight * 0.5;
-      // jacobians[5][0] = \frac{\partial E}{\partial \phi_u}
-      jacobians[5][0] = 0;
+        // jacobians[1][0] = \frac{\partial E}{\partial \phi}
+        double dDu_dphi = nx_u * dnz_dphi + nz_u * dnx_dphi;
+        double dDl_dphi = nz_l * dny_dphi - ny_l * dnz_dphi;
+        double dFdphi_u = dDu_dphi * nz2 - 2 * Du * nz * dnz_dtheta;
+        double dFdphi_l = dDl_dphi * nz2 - 2 * Dl * nz * dnz_dtheta;
+        jacobians[1][0] = (dFdphi_u - dFdphi_l) / (nz4 + 1e-16) * weight;
+      }
+
+      {
+        double dnx_dtheta = -sin(theta_l);
+        double dny_dtheta = cos(theta_l) * cos(phi_l);
+        double dnz_dtheta = cos(theta_l) * sin(phi_l);
+
+        double dnx_dphi = 0;
+        double dny_dphi = - sin(theta_l) * sin(phi_l);
+        double dnz_dphi = sin(theta_l) * cos(phi_l);
+
+        // jacobians[2][0] = \frac{\partial E}{\partial \theta_l}
+        double dDu_dtheta = 0;
+        double dDl_dtheta = nz_l * dny_dtheta - ny_l * dnz_dtheta;
+        double dFdtheta_u = dDu_dtheta * nz2 - 2 * Du * nz * dnz_dtheta;
+        double dFdtheta_l = dDl_dtheta * nz2 - 2 * Dl * nz * dnz_dtheta;
+        jacobians[2][0] = (dFdtheta_u - dFdtheta_l) / (nz4 + 1e-16) * weight;
+
+        // jacobians[3][0] = \frac{\partial E}{\partial \phi_l}
+        double dDu_dphi = 0;
+        double dDl_dphi = nz_l * dny_dphi - ny_l * dnz_dphi;
+        double dFdphi_u = dDu_dphi * nz2 - 2 * Du * nz * dnz_dtheta;
+        double dFdphi_l = dDl_dphi * nz2 - 2 * Dl * nz * dnz_dtheta;
+        jacobians[3][0] = (dFdphi_u - dFdphi_l) / (nz4 + 1e-16) * weight;
+      }
+
+      {
+        double dnx_dtheta = -sin(theta_u);
+        double dny_dtheta = cos(theta_u) * cos(phi_u);
+        double dnz_dtheta = cos(theta_u) * sin(phi_u);
+
+        double dnx_dphi = 0;
+        double dny_dphi = - sin(theta_u) * sin(phi_u);
+        double dnz_dphi = sin(theta_u) * cos(phi_u);
+
+        // jacobians[4][0] = \frac{\partial E}{\partial \theta_u}
+        double dDu_dtheta = nx_u * dnz_dtheta - nz_u * dnx_dtheta;
+        double dDl_dtheta = 0;
+        double dFdtheta_u = dDu_dtheta * nz2 - 2 * Du * nz * dnz_dtheta;
+        double dFdtheta_l = dDl_dtheta * nz2 - 2 * Dl * nz * dnz_dtheta;
+        jacobians[4][0] = (dFdtheta_u - dFdtheta_l) / (nz4 + 1e-16) * weight;
+
+        // jacobians[5][0] = \frac{\partial E}{\partial \phi_u}
+        double dDu_dphi = nx_u * dnz_dphi + nz_u * dnx_dphi;
+        double dDl_dphi = 0;
+        double dFdphi_u = dDu_dphi * nz2 - 2 * Du * nz * dnz_dtheta;
+        double dFdphi_l = dDl_dphi * nz2 - 2 * Dl * nz * dnz_dtheta;
+        jacobians[5][0] = (dFdphi_u - dFdphi_l) / (nz4 + 1e-16) * weight;
+      }
     }
     return true;
   }
 
+  double dx, dy;
   double weight;
 };
 
@@ -335,9 +398,9 @@ struct NormalMapRegularizationTerm {
 
       double theta = parameters[i*2][0], phi = parameters[i*2+1][0];
 
-      double nx = sin(theta) * sin(phi);
-      double ny = cos(phi);
-      double nz = cos(theta) * sin(phi);
+      double nx = cos(theta);
+      double ny = sin(theta) * cos(phi);
+      double nz = sin(theta) * sin(phi);
 
       normal_LoG += Vector3d(nx, ny, nz) * kval;
     }
@@ -375,9 +438,9 @@ struct NormalMapRegularizationTerm_analytic : public ceres::CostFunction {
 
       double theta = parameters[i*2][0], phi = parameters[i*2+1][0];
 
-      double nx = sin(theta) * sin(phi);
-      double ny = cos(phi);
-      double nz = cos(theta) * sin(phi);
+      double nx = cos(theta);
+      double ny = sin(theta) * cos(phi);
+      double nz = sin(theta) * sin(phi);
 
       normal_LoG += Vector3d(nx, ny, nz) * kval;
     }
@@ -393,13 +456,13 @@ struct NormalMapRegularizationTerm_analytic : public ceres::CostFunction {
         double w = info[i].second;
         double theta = parameters[i*2][0], phi = parameters[i*2+1][0];
 
-        jacobians[i*2][0] = w * cos(theta) * sin(phi) * weight;
-        jacobians[i*2][1] = 0;
-        jacobians[i*2][2] = - w * sin(theta) * sin(phi) * weight;
+        jacobians[i*2][0] = - w * sin(theta) * weight;
+        jacobians[i*2][1] = w * cos(theta) * cos(phi) * weight;
+        jacobians[i*2][2] = w * cos(theta) * sin(phi) * weight;
 
-        jacobians[i*2+1][0] = w * sin(theta) * cos(phi) * weight;
-        jacobians[i*2+1][1] = -w * sin(phi) * weight;
-        jacobians[i*2+1][2] = w * cos(theta) * cos(phi) * weight;
+        jacobians[i*2+1][0] = 0;
+        jacobians[i*2+1][1] = -w * sin(theta) * sin(phi) * weight;
+        jacobians[i*2+1][2] = -w * sin(theta) * cos(phi) * weight;
       }
     }
 
@@ -408,6 +471,28 @@ struct NormalMapRegularizationTerm_analytic : public ceres::CostFunction {
 
   vector<pair<int, double>> info;
   Vector3d normal_ref_LoG;
+  double weight;
+};
+
+struct NormalMapAngleRegularizationTerm : public ceres::CostFunction {
+  NormalMapAngleRegularizationTerm(double weight) : weight(weight) {
+    mutable_parameter_block_sizes()->clear();
+    mutable_parameter_block_sizes()->push_back(1);
+    set_num_residuals(1);
+  }
+
+  virtual bool Evaluate(double const *const *parameters,
+                        double *residuals,
+                        double **jacobians) const {
+    residuals[0] = parameters[0][0] * weight;
+    if (jacobians != NULL) {
+      if( jacobians[0] != NULL ) {
+        jacobians[0][0] = weight;
+      }
+    }
+    return true;
+  }
+
   double weight;
 };
 
