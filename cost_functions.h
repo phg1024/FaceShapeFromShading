@@ -156,12 +156,12 @@ struct NormalMapDataTerm_analytic : public ceres::CostFunction {
       double LdotdYdtheta = lighting_coeffs.transpose() * dYdtheta;
       double LdotdYdphi = lighting_coeffs.transpose() * dYdphi;
 
-      // jacobians[i][0] = \frac{\partial E}{\partial \theta}
+      // jacobians[0][i] = \frac{\partial E}{\partial \theta}
       jacobians[0][0] = -ar * LdotdYdtheta;
       jacobians[0][1] = -ag * LdotdYdtheta;
       jacobians[0][2] = -ab * LdotdYdtheta;
 
-      // jacobians[i][1] = \frac{\partial E}{\partial \phi}
+      // jacobians[1][i] = \frac{\partial E}{\partial \phi}
       jacobians[1][0] = -ar * LdotdYdphi;
       jacobians[1][1] = -ag * LdotdYdphi;
       jacobians[1][2] = -ab * LdotdYdphi;
@@ -214,9 +214,9 @@ struct NormalMapIntegrabilityTerm {
 
     if(weight == 0) residuals[0] = 0;
     else {
-      nz = round_off(nz, 1e-6);
-      nz_l = round_off(nz_l, 1e-6);
-      nz_u = round_off(nz_u, 1e-6);
+      nz = round_off(nz, 1e-16);
+      nz_l = round_off(nz_l, 1e-16);
+      nz_u = round_off(nz_u, 1e-16);
 
       double nxnz = nx / nz;
       double nxnz_u = nx_u / nz_u;
@@ -281,10 +281,10 @@ struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
     double ny_u = sinTheta_u * cosPhi_u;
     double nz_u = sinTheta_u * sinPhi_u;
 
-    double nxnz = nx / round_off(nz, 1e-6);
-    double nxnz_u = nx_u / round_off(nz_u, 1e-6);
-    double nynz = ny / round_off(nz, 1e-6);
-    double nynz_l = ny_l / round_off(nz_l, 1e-6);
+    double nxnz = nx / round_off(nz, 1e-16);
+    double nxnz_u = nx_u / round_off(nz_u, 1e-16);
+    double nynz = ny / round_off(nz, 1e-16);
+    double nynz_l = ny_l / round_off(nz_l, 1e-16);
 
     residuals[0] = ((nxnz_u - nxnz) - (nynz - nynz_l)) * weight;
 
@@ -292,21 +292,23 @@ struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
       for(int param_i=0;param_i<6;++param_i) assert(jacobians[0] != NULL);
 
       {
-        double nz2 = nz * nz + 1e-6;
+        double nz2 = nz * nz + 1e-16;
 
         // jacobians[0][0] = \frac{\partial E}{\partial \theta}
-        double dnxny_dtheta = -sinTheta + cosTheta * cosPhi;
+        double dnx_dtheta = -sinTheta;
+        double dny_dtheta = cosTheta * cosPhi;
         double dnz_dtheta = cosTheta * sinPhi;
-        jacobians[0][0] = -(dnxny_dtheta * nz - (nx + ny) * dnz_dtheta) / nz2 * weight;
+        jacobians[0][0] = -((dnx_dtheta + dny_dtheta) * nz - (nx + ny) * dnz_dtheta) / nz2 * weight;
 
         // jacobians[1][0] = \frac{\partial E}{\partial \phi}
-        double dnxny_dphi = -sinTheta * sinPhi;
+        double dnx_dphi = 0;
+        double dny_dphi = -sinTheta * sinPhi;
         double dnz_dphi = sinTheta * cosPhi;
-        jacobians[1][0] = -(dnxny_dphi * nz - (nx + ny) * dnz_dphi) / nz2 * weight;
+        jacobians[1][0] = -((dnx_dphi + dny_dphi) * nz - (nx + ny) * dnz_dphi) / nz2 * weight;
       }
 
       {
-        double nz_l2 = nz_l * nz_l + 1e-6;
+        double nz_l2 = nz_l * nz_l + 1e-16;
 
         // jacobians[2][0] = \frac{\partial E}{\partial \theta_l}
         double dny_dtheta = cosTheta_l * cosPhi_l;
@@ -322,7 +324,7 @@ struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
       }
 
       {
-        double nz_u2 = nz_u * nz_u + 1e-6;
+        double nz_u2 = nz_u * nz_u + 1e-16;
 
         // jacobians[4][0] = \frac{\partial E}{\partial \theta_u}
         double dnx_dtheta = -sinTheta_u;
@@ -334,6 +336,9 @@ struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
         double dnz_dphi = sinTheta_u * cosPhi_u;
         jacobians[5][0] = (dnx_dphi * nz_u - nx_u * dnz_dphi) / nz_u2 * weight;
       }
+
+      //for(int param_i=0;param_i<6;++param_i) cout << jacobians[param_i][0] << ' ';
+      //cout << endl;
     }
     return true;
   }

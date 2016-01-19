@@ -582,8 +582,7 @@ int main(int argc, char **argv) {
           dz_gradient.at<float>(i, j) = sqrt(dzdx * dzdx + dzdy * dzdy);
         }
       }
-      cv::threshold(dz_gradient, dz_gradient, 0.1, 255, cv::THRESH_BINARY);
-      cv::dilate(dz_gradient, dz_gradient, cv::Mat());
+      cv::threshold(dz_gradient, dz_gradient, 0.15, 255, cv::THRESH_BINARY);
       cv::imwrite( (results_path / fs::path("zmap_gradient" + std::to_string(i) + ".png")).string().c_str(), dz_gradient );
 
       vector<bool> is_boundary(num_rows * num_cols, false);
@@ -763,7 +762,7 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 20.0;
+          const double lambda2 = 10.0;
 
           // ====================================================================
           // collect valid pixels
@@ -975,7 +974,7 @@ int main(int argc, char **argv) {
 
         // [Shape from shading] step 3: fix albedo and lighting, estimate normal map
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
-        for(int iii=0;iii<5;++iii){
+        for(int iii=0;iii<1;++iii){
           // ====================================================================
           // collect valid pixels
           // ====================================================================
@@ -988,11 +987,10 @@ int main(int argc, char **argv) {
               float zval = zmaps[i].at<float>(y, x);
               if (zval < -1e5) continue;
               else {
-                pixel_indices_i.push_back(glm::ivec2(y, x));
+                bool flag = (face_boundary_indices.count(face_indices_maps[i][y*num_cols+x]) == 1);
+                if(flag) boundary_pixel_image.at<unsigned char>(y, x) = 255;
+                else pixel_indices_i.push_back(glm::ivec2(y, x));
               }
-
-              bool flag = (face_boundary_indices.count(face_indices_maps[i][y*num_cols+x]) == 1);
-              if(flag) boundary_pixel_image.at<unsigned char>(y, x) = 255;
             }
           }
 
@@ -1203,10 +1201,10 @@ int main(int argc, char **argv) {
             options.num_linear_solver_threads = 8;
 
             options.initial_trust_region_radius = 1;
-            options.min_trust_region_radius = 0.995;
-            options.max_trust_region_radius = 1.005;
-            options.min_lm_diagonal = 0.995;
-            options.max_lm_diagonal = 1.005;
+            options.min_trust_region_radius = 0.95;
+            options.max_trust_region_radius = 1.05;
+            options.min_lm_diagonal = 0.95;
+            options.max_lm_diagonal = 1.05;
 
             options.minimizer_progress_to_stdout = true;
             //options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
@@ -1356,6 +1354,7 @@ int main(int argc, char **argv) {
                 valid &= depth_map_i.at<double>(y+dr, x+dc) > -1e5;
               }
             }
+
             if (valid) {
               pixel_indices_i.push_back(glm::ivec2(y, x));
             }
@@ -1380,7 +1379,7 @@ int main(int argc, char **argv) {
 #if USE_IMAGE_GRID
         const double w_LoG = 0.0, w_diff = 0.0;
 #else
-        const double w_LoG = 0.1, w_diff = 0.05;
+        const double w_LoG = 0.01, w_diff = 0.01;
 #endif
         // ====================================================================
         // part 1: normal constraints
@@ -1394,8 +1393,8 @@ int main(int argc, char **argv) {
           double nx = normal_ij[0], ny = normal_ij[1], nz = normal_ij[2];
 
           bool boundary_pixel = is_boundary[pidx];
-          //double w_pixel = boundary_pixel?0.1:1;
-          double w_pixel = 1.0;
+          double w_pixel = boundary_pixel?0.0:1;
+          //double w_pixel = 1.0;
 
           if(r > 0 && r < num_rows - 1) {
             int pidx_u = pidx - num_cols;
@@ -1447,7 +1446,10 @@ int main(int argc, char **argv) {
           bool boundary_pixel = is_boundary[item_j.row()] || is_boundary[item_j.col()];
           double w_pixel = boundary_pixel?0:1;
 
-          if(is_valid_pixel[item_j.row()] && is_valid_pixel[item_j.col()]) {
+          float zval_j = zmaps[i].at<float>(item_j.row(), item_j.col());
+          bool good_constraint = (zval_j > -1e5);
+
+          if(is_valid_pixel[item_j.row()] && is_valid_pixel[item_j.col()] && good_constraint) {
             int new_i = pixel_index_map[item_j.row()] + num_constraints * 2;
             int new_j = pixel_index_map[item_j.col()];
             A_coeffs.push_back(Tripletd(new_i, new_j, item_j.value() * w_LoG * w_pixel));
