@@ -582,7 +582,7 @@ int main(int argc, char **argv) {
           dz_gradient.at<float>(i, j) = sqrt(dzdx * dzdx + dzdy * dzdy);
         }
       }
-      cv::threshold(dz_gradient, dz_gradient, 0.15, 255, cv::THRESH_BINARY);
+      cv::threshold(dz_gradient, dz_gradient, 0.1, 255, cv::THRESH_BINARY);
       cv::dilate(dz_gradient, dz_gradient, cv::Mat());
       cv::imwrite( (results_path / fs::path("zmap_gradient" + std::to_string(i) + ".png")).string().c_str(), dz_gradient );
 
@@ -763,7 +763,7 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 10.0;
+          const double lambda2 = 20.0;
 
           // ====================================================================
           // collect valid pixels
