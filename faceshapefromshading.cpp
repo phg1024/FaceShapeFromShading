@@ -974,20 +974,26 @@ int main(int argc, char **argv) {
 
         // [Shape from shading] step 3: fix albedo and lighting, estimate normal map
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
-        for(int iii=0;iii<1;++iii){
+        for(int iii=0;iii<5;++iii){
           // ====================================================================
           // collect valid pixels
           // ====================================================================
           vector<glm::ivec2> pixel_indices_i;
 
           cv::Mat boundary_pixel_image(num_rows, num_cols, CV_8U);
-          for (int y = 0; y < normal_maps[i].rows; ++y) {
-            for (int x = 0; x < normal_maps[i].cols; ++x) {
+          for (int y = 1; y < normal_maps[i].rows-1; ++y) {
+            for (int x = 1; x < normal_maps[i].cols-1; ++x) {
               boundary_pixel_image.at<unsigned char>(y, x) = 0;
               float zval = zmaps[i].at<float>(y, x);
               if (zval < -1e5) continue;
               else {
-                bool flag = (face_boundary_indices.count(face_indices_maps[i][y*num_cols+x]) == 1);
+
+                bool flag = false;
+                flag |= zmaps[i].at<float>(y-1, x) < -1e5;
+                flag |= zmaps[i].at<float>(y+1, x) < -1e5;
+                flag |= zmaps[i].at<float>(y, x-1) < -1e5;
+                flag |= zmaps[i].at<float>(y, x+1) < -1e5;
+
                 if(flag) boundary_pixel_image.at<unsigned char>(y, x) = 255;
                 else pixel_indices_i.push_back(glm::ivec2(y, x));
               }
@@ -996,7 +1002,8 @@ int main(int argc, char **argv) {
 
           for(int r=0;r<num_rows;++r) {
             for(int c=0;c<num_cols;++c) {
-              if(boundary_pixel_image.at<unsigned char>(r, c) == 255 || dz_gradient.at<float>(r, c) > 128.0) {
+              if(boundary_pixel_image.at<unsigned char>(r, c) == 255 ||
+                 (dz_gradient.at<float>(r, c) > 128.0 && boundary_pixel_image.at<unsigned char>(r, c) < 128)) {
                 boundary_pixel_image.at<unsigned char>(r, c) = 255;
                 is_boundary[r*num_cols+c] = true;
               }
@@ -1379,7 +1386,7 @@ int main(int argc, char **argv) {
 #if USE_IMAGE_GRID
         const double w_LoG = 0.0, w_diff = 0.0;
 #else
-        const double w_LoG = 0.01, w_diff = 0.01;
+        const double w_LoG = 0.05, w_diff = 0.01;
 #endif
         // ====================================================================
         // part 1: normal constraints
@@ -1440,22 +1447,38 @@ int main(int argc, char **argv) {
         // ====================================================================
         // part 2: LoG constaints
         // ====================================================================
-        for(int j=0;j<LoG_coeffs.size();++j) {
-          auto& item_j = LoG_coeffs[j];
+        for(int j = 0; j < num_constraints; ++j) {
+          int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+          int pidx = r * num_cols + c;
 
-          bool boundary_pixel = is_boundary[item_j.row()] || is_boundary[item_j.col()];
-          double w_pixel = boundary_pixel?0:1;
+          for(auto p : LoG_coeffs_perpixel[pidx]) {
+            int qidx;
+            double val_LoG;
+            tie(qidx, val_LoG) = p;
 
-          float zval_j = zmaps[i].at<float>(item_j.row(), item_j.col());
-          bool good_constraint = (zval_j > -1e5);
+            bool boundary_pixel = is_boundary[pidx] || is_boundary[qidx];
+            double w_pixel = boundary_pixel?1.0:1.0;
 
-          if(is_valid_pixel[item_j.row()] && is_valid_pixel[item_j.col()] && good_constraint) {
-            int new_i = pixel_index_map[item_j.row()] + num_constraints * 2;
-            int new_j = pixel_index_map[item_j.col()];
-            A_coeffs.push_back(Tripletd(new_i, new_j, item_j.value() * w_LoG * w_pixel));
-            int rj = item_j.row() / num_cols;
-            int cj = item_j.row() % num_cols;
-            B(new_i) = depth_map_LoG_i.at<double>(rj, cj) * w_LoG * w_pixel;
+            auto good_LoG = [&](int pixel_index) {
+              int y = pixel_index / num_cols, x = pixel_index % num_cols;
+              bool flag = true;
+              for(int dr=-2;dr<=2;++dr) {
+                for(int dc=-2;dc<=2;++dc) {
+                  flag &= depth_map_i.at<double>(y+dr, x+dc) > -1e5;
+                }
+              }
+              return flag;
+            };
+
+            bool good_constraint = good_LoG(pidx) && good_LoG(qidx);
+            if(!good_constraint) w_pixel = 0;
+
+            if(is_valid_pixel[pidx] && is_valid_pixel[qidx]) {
+              int new_i = pixel_index_map[pidx] + num_constraints * 2;
+              int new_j = pixel_index_map[qidx];
+              A_coeffs.push_back(Tripletd(new_i, new_j, val_LoG * w_LoG * w_pixel));
+              B(new_i) = depth_map_LoG_i.at<double>(r, c) * w_LoG * w_pixel;
+            }
           }
         }
         cout << "part 2 done." << endl;
@@ -1470,7 +1493,7 @@ int main(int argc, char **argv) {
           int new_j = j;
 
           bool boundary_pixel = is_boundary[pidx];
-          double w_discont = boundary_pixel?10:1;
+          double w_discont = boundary_pixel?2.0:1.0;
 
           A_coeffs.push_back(Tripletd(new_i, new_j, w_diff*w_discont));
           B(new_i) = depth_map_i.at<double>(r, c) * w_diff*w_discont;
