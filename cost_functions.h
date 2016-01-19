@@ -216,8 +216,8 @@ struct NormalMapIntegrabilityTerm {
     if(weight == 0) residuals[0] = 0;
     else {
       double nz2 = nz * nz + 1e-16;
-      double part1 = (nz * nx_u - nz_u * nx) * max(fabs(dy), 1e-8);
-      double part2 = (nz_l * ny - nz * ny_l) * max(fabs(dx), 1e-8);
+      double part1 = (nx_u * nz - nz_u * nx) * max(fabs(dy), 1e-8);
+      double part2 = (nz_l * ny - ny_l * nz) * max(fabs(dx), 1e-8);
 
       residuals[0] = (part1 - part2) / nz2 * weight;
     }
@@ -261,17 +261,26 @@ struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
     // ny = sin(theta) * cos(phi)
     // nz = sin(theta) * sin(phi)
 
-    double nx = cos(theta);
-    double ny = sin(theta) * cos(phi);
-    double nz = sin(theta) * sin(phi);
+    double cosTheta = cos(theta), sinTheta = sin(theta);
+    double cosPhi = cos(phi), sinPhi = sin(phi);
 
-    double nx_l = cos(theta_l);
-    double ny_l = sin(theta_l) * cos(phi_l);
-    double nz_l = sin(theta_l) * sin(phi_l);
+    double nx = cosTheta;
+    double ny = sinTheta * cosPhi;
+    double nz = sinTheta * sinPhi;
 
-    double nx_u = cos(theta_u);
-    double ny_u = sin(theta_u) * cos(phi_u);
-    double nz_u = sin(theta_u) * sin(phi_u);
+    double cosTheta_l = cos(theta_l), sinTheta_l = sin(theta_l);
+    double cosPhi_l = cos(phi_l), sinPhi_l = sin(phi_l);
+
+    double nx_l = cosTheta_l;
+    double ny_l = sinTheta_l * cosPhi_l;
+    double nz_l = sinTheta_l * sinPhi_l;
+
+    double cosTheta_u = cos(theta_u), sinTheta_u = sin(theta_u);
+    double cosPhi_u = cos(phi_u), sinPhi_u = sin(phi_u);
+
+    double nx_u = cosTheta_u;
+    double ny_u = sinTheta_u * cosPhi_u;
+    double nz_u = sinTheta_u * sinPhi_u;
 
     /*
     double nxnz = nx / nz;
@@ -282,21 +291,9 @@ struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
     residuals[0] = (nxnz_u - nxnz - (nynz - nynz_l)) * weight;
     */
 
-    double dnx_dtheta = -sin(theta);
-    double dny_dtheta = cos(theta) * cos(phi);
-    double dnz_dtheta = cos(theta) * sin(phi);
-
-    double dnx_dphi = 0;
-    double dny_dphi = - sin(theta) * sin(phi);
-    double dnz_dphi = sin(theta) * cos(phi);
-
     double nz2 = nz * nz;
-    double dnzdy = dnz_dtheta * (theta_u - theta) + dnz_dphi * (phi_u - phi);
-    double dnxdy = dnx_dtheta * (theta_u - theta);
-    double dnydx = dny_dtheta * (theta - theta_l) + dny_dphi * (phi - phi_l);
-    double dnzdx = dnz_dtheta * (theta - theta_l) + dnz_dphi * (phi - phi_l);
-    double Du = (nz * dnxdy - nx * dnzdy) * max(fabs(dy), 1e-8);
-    double Dl = (nz * dnydx - ny * dnzdx) * max(fabs(dx), 1e-8);
+    double Du = (nx_u * nz - nz_u * nx) * max(fabs(dy), 1e-8);
+    double Dl = (nz_l * ny - ny_l * nz) * max(fabs(dx), 1e-8);
 
     residuals[0] = (Du - Dl) / (nz2 + 1e-16) * weight;
 
@@ -304,76 +301,77 @@ struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
       for(int param_i=0;param_i<6;++param_i) assert(jacobians[0] != NULL);
 
       double nz4 = nz2 * nz2;
+
       {
-        double dnx_dtheta = -sin(theta);
-        double dny_dtheta = cos(theta) * cos(phi);
-        double dnz_dtheta = cos(theta) * sin(phi);
+        double dnx_dtheta = -sinTheta;
+        double dny_dtheta = cosTheta * cosPhi;
+        double dnz_dtheta = cosTheta * sinPhi;
 
         double dnx_dphi = 0;
-        double dny_dphi = - sin(theta) * sin(phi);
-        double dnz_dphi = sin(theta) * cos(phi);
+        double dny_dphi = -sinTheta * sinPhi;
+        double dnz_dphi = sinTheta * cosPhi;
 
         // jacobians[0][0] = \frac{\partial E}{\partial \theta}
         double dDu_dtheta = nx_u * dnz_dtheta - nz_u * dnx_dtheta;
         double dDl_dtheta = nz_l * dny_dtheta - ny_l * dnz_dtheta;
-        double dFdtheta_u = dDu_dtheta * nz2 - 2 * Du * nz * dnz_dtheta;
-        double dFdtheta_l = dDl_dtheta * nz2 - 2 * Dl * nz * dnz_dtheta;
-        jacobians[0][0] = (dFdtheta_u - dFdtheta_l) / (nz4 + 1e-16) * weight;
+        double dFu_dtheta = dDu_dtheta * nz2 - 2 * Du * nz * dnz_dtheta;
+        double dFl_dtheta = dDl_dtheta * nz2 - 2 * Dl * nz * dnz_dtheta;
+        jacobians[0][0] = (dFu_dtheta - dFl_dtheta) / (nz4 + 1e-16) * weight;
 
         // jacobians[1][0] = \frac{\partial E}{\partial \phi}
-        double dDu_dphi = nx_u * dnz_dphi + nz_u * dnx_dphi;
+        double dDu_dphi = nx_u * dnz_dphi - nz_u * dnx_dphi;
         double dDl_dphi = nz_l * dny_dphi - ny_l * dnz_dphi;
-        double dFdphi_u = dDu_dphi * nz2 - 2 * Du * nz * dnz_dtheta;
-        double dFdphi_l = dDl_dphi * nz2 - 2 * Dl * nz * dnz_dtheta;
-        jacobians[1][0] = (dFdphi_u - dFdphi_l) / (nz4 + 1e-16) * weight;
+        double dFu_dphi = dDu_dphi * nz2 - 2 * Du * nz * dnz_dphi;
+        double dFl_dphi = dDl_dphi * nz2 - 2 * Dl * nz * dnz_dphi;
+        jacobians[1][0] = (dFu_dphi - dFl_dphi) / (nz4 + 1e-16) * weight;
       }
 
       {
-        double dnx_dtheta = -sin(theta_l);
-        double dny_dtheta = cos(theta_l) * cos(phi_l);
-        double dnz_dtheta = cos(theta_l) * sin(phi_l);
+        double dnx_dtheta = -sinTheta_l;
+        double dny_dtheta = cosTheta_l * cosPhi_l;
+        double dnz_dtheta = cosTheta_l * sinPhi_l;
 
         double dnx_dphi = 0;
-        double dny_dphi = - sin(theta_l) * sin(phi_l);
-        double dnz_dphi = sin(theta_l) * cos(phi_l);
+        double dny_dphi = -sinTheta_l * sinPhi_l;
+        double dnz_dphi = sinTheta_l * cosPhi_l;
 
         // jacobians[2][0] = \frac{\partial E}{\partial \theta_l}
         double dDu_dtheta = 0;
-        double dDl_dtheta = nz_l * dny_dtheta - ny_l * dnz_dtheta;
-        double dFdtheta_u = dDu_dtheta * nz2 - 2 * Du * nz * dnz_dtheta;
-        double dFdtheta_l = dDl_dtheta * nz2 - 2 * Dl * nz * dnz_dtheta;
-        jacobians[2][0] = (dFdtheta_u - dFdtheta_l) / (nz4 + 1e-16) * weight;
+        double dDl_dtheta = ny * dnz_dtheta - nz * dny_dtheta;
+        double dFu_dtheta = dDu_dtheta * nz2;
+        double dFl_dtheta = dDl_dtheta * nz2;
+        jacobians[2][0] = (dFu_dtheta - dFl_dtheta) / (nz4 + 1e-16) * weight;
 
         // jacobians[3][0] = \frac{\partial E}{\partial \phi_l}
         double dDu_dphi = 0;
-        double dDl_dphi = nz_l * dny_dphi - ny_l * dnz_dphi;
-        double dFdphi_u = dDu_dphi * nz2 - 2 * Du * nz * dnz_dtheta;
-        double dFdphi_l = dDl_dphi * nz2 - 2 * Dl * nz * dnz_dtheta;
-        jacobians[3][0] = (dFdphi_u - dFdphi_l) / (nz4 + 1e-16) * weight;
+        double dDl_dphi = ny * dnz_dphi - nz * dny_dphi;
+        double dFu_dphi = dDu_dphi * nz2;
+        double dFl_dphi = dDl_dphi * nz2;
+        jacobians[3][0] = (dFu_dphi - dFl_dphi) / (nz4 + 1e-16) * weight;
       }
 
       {
-        double dnx_dtheta = -sin(theta_u);
-        double dny_dtheta = cos(theta_u) * cos(phi_u);
-        double dnz_dtheta = cos(theta_u) * sin(phi_u);
+        double dnx_dtheta = -sinTheta_u;
+        double dny_dtheta = cosTheta_u * cosPhi_u;
+        double dnz_dtheta = cosTheta_u * sinPhi_u;
 
         double dnx_dphi = 0;
-        double dny_dphi = - sin(theta_u) * sin(phi_u);
-        double dnz_dphi = sin(theta_u) * cos(phi_u);
+        double dny_dphi = - sinTheta_u * sinPhi_u;
+        double dnz_dphi = sinTheta_u * cosPhi_u;
 
         // jacobians[4][0] = \frac{\partial E}{\partial \theta_u}
-        double dDu_dtheta = nx_u * dnz_dtheta - nz_u * dnx_dtheta;
+        double dDu_dtheta = nz * dnx_dtheta - nx * dnz_dtheta;
         double dDl_dtheta = 0;
-        double dFdtheta_u = dDu_dtheta * nz2 - 2 * Du * nz * dnz_dtheta;
-        double dFdtheta_l = dDl_dtheta * nz2 - 2 * Dl * nz * dnz_dtheta;
-        jacobians[4][0] = (dFdtheta_u - dFdtheta_l) / (nz4 + 1e-16) * weight;
+        double dFu_dtheta = dDu_dtheta * nz2;
+        double dFl_dtheta = dDl_dtheta * nz2;
+        jacobians[4][0] = (dFu_dtheta - dFl_dtheta) / (nz4 + 1e-16) * weight;
 
         // jacobians[5][0] = \frac{\partial E}{\partial \phi_u}
-        double dDu_dphi = nx_u * dnz_dphi + nz_u * dnx_dphi;
+        double dDu_dphi = nz * dnx_dphi - nx * dnz_dphi;
         double dDl_dphi = 0;
-        double dFdphi_u = dDu_dphi * nz2 - 2 * Du * nz * dnz_dtheta;
-        double dFdphi_l = dDl_dphi * nz2 - 2 * Dl * nz * dnz_dtheta;
-        jacobians[5][0] = (dFdphi_u - dFdphi_l) / (nz4 + 1e-16) * weight;
+        double dFu_dphi = dDu_dphi * nz2;
+        double dFl_dphi = dDl_dphi * nz2;
+        jacobians[5][0] = (dFu_dphi - dFl_dphi) / (nz4 + 1e-16) * weight;
       }
     }
     return true;

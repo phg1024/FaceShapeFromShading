@@ -582,7 +582,7 @@ int main(int argc, char **argv) {
           dz_gradient.at<float>(i, j) = sqrt(dzdx * dzdx + dzdy * dzdy);
         }
       }
-      cv::threshold(dz_gradient, dz_gradient, 0.25, 255, cv::THRESH_BINARY);
+      cv::threshold(dz_gradient, dz_gradient, 0.15, 255, cv::THRESH_BINARY);
       cv::dilate(dz_gradient, dz_gradient, cv::Mat());
       cv::imwrite( (results_path / fs::path("zmap_gradient" + std::to_string(i) + ".png")).string().c_str(), dz_gradient );
 
@@ -763,7 +763,7 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 25.0 / sqrt(iters + 1);
+          const double lambda2 = 10.0;
 
           // ====================================================================
           // collect valid pixels
@@ -975,7 +975,7 @@ int main(int argc, char **argv) {
 
         // [Shape from shading] step 3: fix albedo and lighting, estimate normal map
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
-        for(int iii=0;iii<3;++iii){
+        for(int iii=0;iii<5;++iii){
           // ====================================================================
           // collect valid pixels
           // ====================================================================
@@ -1064,9 +1064,9 @@ int main(int argc, char **argv) {
 
           const double w_data = 1.0;
           const double w_reg = 0.0;
-          const double w_integrability = 2.0;
+          const double w_integrability = 1.0;
 
-          #define USE_ANALYTIC_COST_FUNCTIONS 0
+          #define USE_ANALYTIC_COST_FUNCTIONS 1
           PhGUtils::message("Assembling cost functions ...");
           {
             boost::timer::auto_cpu_timer timer_solve(
@@ -1201,16 +1201,16 @@ int main(int argc, char **argv) {
             options.max_num_iterations = 10;
             options.num_threads = 8;
             options.num_linear_solver_threads = 8;
+
             options.initial_trust_region_radius = 1;
-            options.min_trust_region_radius = 0.1;
-            options.max_trust_region_radius = 10.;
-            options.min_lm_diagonal = 0.1;
-            options.max_lm_diagonal = 10.0;
-            //options.minimizer_type = ceres::LINE_SEARCH;
-            //options.line_search_direction_type = ceres::LBFGS;
-            options.minimizer_progress_to_stdout = false;
-            options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
-            options.sparse_linear_algebra_library_type = ceres::SUITE_SPARSE;
+            options.min_trust_region_radius = 0.995;
+            options.max_trust_region_radius = 1.005;
+            options.min_lm_diagonal = 0.995;
+            options.max_lm_diagonal = 1.005;
+
+            options.minimizer_progress_to_stdout = true;
+            //options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
+            //options.sparse_linear_algebra_library_type = ceres::SUITE_SPARSE;
             ceres::Solver::Summary summary;
             Solve(options, &problem, &summary);
             cout << summary.BriefReport() << endl;
@@ -1258,7 +1258,7 @@ int main(int argc, char **argv) {
 
           #if 0
           if(iters < max_iters - 1) {
-            cv::medianBlur(normal_map_blurred, normal_map_blurred, 5);
+            cv::medianBlur(normal_map_blurred, normal_map_blurred, 3);
           }
           #endif
 
