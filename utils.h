@@ -8,6 +8,22 @@
 #include <MultilinearReconstruction/utils.hpp>
 
 template <typename T>
+pair<T, T> normal2sphericalcoords(T nx, T ny, T nz) {
+  // nx = cos(theta)
+  // ny = sin(theta) * sin(phi)
+  // nz = sin(theta) * cos(phi)
+  return make_pair(acos(nx), atan2(ny, nz));
+}
+
+template <typename T>
+tuple<T, T, T> sphericalcoords2normal(double theta, double phi) {
+  // nx = cos(theta)
+  // ny = sin(theta) * sin(phi)
+  // nz = sin(theta) * cos(phi)
+  return make_tuple(cos(theta), sin(theta)*sin(phi), sin(theta)*cos(phi));
+}
+
+template <typename T>
 T clamp(T val, T lower, T upper) {
   return std::max(lower, std::min(upper, val));
 }

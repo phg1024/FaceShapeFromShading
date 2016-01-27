@@ -4,6 +4,7 @@
 #include <common.h>
 
 #include "ceres/ceres.h"
+#include "utils.h"
 
 struct NormalMapDataTerm {
   NormalMapDataTerm(double Ir, double Ig, double Ib,
@@ -20,13 +21,8 @@ struct NormalMapDataTerm {
 
     double theta = parameters[0][0], phi = parameters[1][0];
 
-    // nx = cos(theta)
-    // ny = sin(theta) * cos(phi)
-    // nz = sin(theta) * sin(phi)
-
-    double nx = cos(theta);
-    double ny = sin(theta) * cos(phi);
-    double nz = sin(theta) * sin(phi);
+    double nx, ny, nz;
+    tie(nx, ny, nz) = sphericalcoords2normal<double>(theta, phi);
 
     VectorXd Y(num_dof);
     Y(0) = 1;
@@ -200,20 +196,20 @@ struct NormalMapIntegrabilityTerm {
     // ny = sin(theta) * cos(phi)
     // nz = sin(theta) * sin(phi)
 
-    double nx = cos(theta);
-    double ny = sin(theta) * cos(phi);
-    double nz = sin(theta) * sin(phi);
+    double nx, ny, nz;
+    tie(nx, ny, nz) = sphericalcoords2normal<double>(theta, phi);
 
-    double nx_l = cos(theta_l);
-    double ny_l = sin(theta_l) * cos(phi_l);
-    double nz_l = sin(theta_l) * sin(phi_l);
+    double nx_l, ny_l, nz_l;
+    tie(nx_l, ny_l, nz_l) = sphericalcoords2normal<double>(theta_l, phi_l);
 
-    double nx_u = cos(theta_u);
-    double ny_u = sin(theta_u) * cos(phi_u);
-    double nz_u = sin(theta_u) * sin(phi_u);
+    double nx_u, ny_u, nz_u;
+    tie(nx_u, ny_u, nz_u) = sphericalcoords2normal<double>(theta_u, phi_u);
 
-    if(weight == 0) residuals[0] = 0;
-    else {
+    if(weight == 0) {
+      residuals[0] = 0;
+      residuals[1] = 0;
+      residuals[2] = 0;
+    } else {
       nz = round_off(nz, 1e-16);
       nz_l = round_off(nz_l, 1e-16);
       nz_u = round_off(nz_u, 1e-16);
@@ -224,6 +220,10 @@ struct NormalMapIntegrabilityTerm {
       double nynz_l = ny_l / nz_l;
 
       residuals[0] = ((nxnz_u - nxnz) - (nynz - nynz_l)) * weight;
+
+      residuals[1] = 0;
+
+      residuals[2] = 0;
     }
 
     return true;

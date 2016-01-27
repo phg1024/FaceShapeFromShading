@@ -401,9 +401,12 @@ int main(int argc, char **argv) {
           double nx = qRed(pix) / 255.0 * 2.0 - 1.0;
           double ny = qGreen(pix) / 255.0 * 2.0 - 1.0;
           double nz = qBlue(pix) / 255.0 * 2.0 - 1.0;
-          double theta = acos(nx), phi = atan2(nz, ny);
 
-          normal_maps_ref[i].at<cv::Vec3d>(y, x) = cv::Vec3d(cos(theta), sin(theta)*cos(phi), sin(theta)*sin(phi));
+          double theta, phi;
+          tie(theta, phi) = normal2sphericalcoords<double>(nx, ny, nz);
+          tie(nx, ny, nz) = sphericalcoords2normal<double>(theta, phi);
+
+          normal_maps_ref[i].at<cv::Vec3d>(y, x) = cv::Vec3d(nx, ny, nz);
 
           // get the screen z-value
           double dvalue = depth[(img.height()-1-y)*img.width()+x];
@@ -582,12 +585,13 @@ int main(int argc, char **argv) {
           dz_gradient.at<float>(i, j) = sqrt(dzdx * dzdx + dzdy * dzdy);
         }
       }
-      cv::threshold(dz_gradient, dz_gradient, 0.15, 255, cv::THRESH_BINARY);
+      cv::threshold(dz_gradient, dz_gradient, 0.1, 255, cv::THRESH_BINARY);
+      cv::dilate(dz_gradient, dz_gradient, cv::Mat());
       cv::imwrite( (results_path / fs::path("zmap_gradient" + std::to_string(i) + ".png")).string().c_str(), dz_gradient );
 
       vector<bool> is_boundary(num_rows * num_cols, false);
 
-      const int max_iters = 4;
+      const int max_iters = 3;
       int iters = 0;
       // [Shape from shading] main loop
       while(iters++ < max_iters){
@@ -598,19 +602,15 @@ int main(int argc, char **argv) {
           // ====================================================================
           vector<glm::ivec2> pixel_indices_i;
 
-          QImage lighting_pixel_image(num_cols, num_rows, QImage::Format_ARGB32);
-          lighting_pixel_image.fill(0);
           for (int y = 0; y < normal_maps[i].rows; ++y) {
             for (int x = 0; x < normal_maps[i].cols; ++x) {
               float zval = zmaps[i].at<float>(y, x);
               int pidx = y * num_cols + x;
               if (zval > -1e5 && (hair_region_indices.count(face_indices_maps[i][pidx]) == 0) && (face_boundary_indices.count(face_indices_maps[i][pidx]) == 0)) {
                 pixel_indices_i.push_back(glm::ivec2(y, x));
-                lighting_pixel_image.setPixel(x, y, qRgb(255, 255, 255));
               }
             }
           }
-          lighting_pixel_image.save( (results_path / fs::path("lighting_pixels" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
 
           // ====================================================================
           // filter pixels
@@ -646,10 +646,21 @@ int main(int argc, char **argv) {
           for(int j=1;j<nbins;++j) {
             counter[j] += counter[j-1];
           }
-          const int cutoff_count = *std::lower_bound(counter.begin(), counter.end(), static_cast<int>(0.95*albedo_distances_i_sorted.size()));
+          const double lighting_pixels_ratio_lower = 0.95;
+          const double lighting_pixels_ratio_upper = 1.00;
+          double lighting_pixels_ratio = iters / (double)max_iters * lighting_pixels_ratio_upper + (1.0 - iters / (double) max_iters) * lighting_pixels_ratio_lower;
+          const int cutoff_count = *std::lower_bound(counter.begin(), counter.end(), static_cast<int>(lighting_pixels_ratio*albedo_distances_i_sorted.size()));
           cout << "num constraints [before]: " << pixel_indices_i.size() << endl;
           pixel_indices_i.erase(pixel_indices_i.begin()+cutoff_count, pixel_indices_i.end());
           cout << "num constraints [after]: " << pixel_indices_i.size() << endl;
+
+          QImage lighting_pixel_image(num_cols, num_rows, QImage::Format_ARGB32);
+          lighting_pixel_image.fill(0);
+          for(int j=0;j<pixel_indices_i.size();++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+            lighting_pixel_image.setPixel(c, r, qRgb(255, 255, 255));
+          }
+          lighting_pixel_image.save( (results_path / fs::path("lighting_pixels" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
 
           // ====================================================================
           // collect constraints from valid pixels
@@ -683,8 +694,12 @@ int main(int argc, char **argv) {
           // assemble matrices
           // ====================================================================
           const int num_dof = 9;  // use first order approximation
-          MatrixXd Y(num_constraints, num_dof);
 
+          MatrixXd Y(num_constraints, num_dof);
+          MatrixXd A(num_constraints * 3, num_dof);
+          VectorXd b(num_constraints * 3);
+
+          #if 0
           Y.col(0) = VectorXd::Ones(num_constraints);
           Y.col(1) = normals_i.col(0);
           Y.col(2) = normals_i.col(1);
@@ -694,9 +709,6 @@ int main(int argc, char **argv) {
           Y.col(6) = normals_i.col(1).cwiseProduct(normals_i.col(2));
           Y.col(7) = normals_i.col(0).cwiseProduct(normals_i.col(0)) - normals_i.col(1).cwiseProduct(normals_i.col(1));
           Y.col(8) = 3 * normals_i.col(2).cwiseProduct(normals_i.col(2)) - VectorXd::Ones(num_constraints);
-
-          MatrixXd A(num_constraints * 3, num_dof);
-          VectorXd b(num_constraints * 3);
 
           VectorXd a_vec(num_constraints * 3);
           a_vec.topRows(num_constraints) = albedos_i.col(0);
@@ -713,12 +725,39 @@ int main(int argc, char **argv) {
           b.topRows(num_constraints) = pixels_i.col(0);
           b.middleRows(num_constraints, num_constraints) = pixels_i.col(1);
           b.bottomRows(num_constraints) = pixels_i.col(2);
+          #else
+
+          for(int j=0;j<num_constraints;++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+
+            cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(r, c);
+            double nx, ny, nz;
+            nx = pix[0], ny = pix[1], nz = pix[2];
+
+            cv::Vec3d pix_albedo = albedos[i].at<cv::Vec3d>(r, c);
+            double ar = pix_albedo[0], ag = pix_albedo[1], ab = pix_albedo[2];
+
+            auto pix_i = bundle.image.pixel(c, r);
+            double Ir = qRed(pix_i) / 255.0;
+            double Ig = qGreen(pix_i) / 255.0;
+            double Ib = qBlue(pix_i) / 255.0;
+
+            Y(j, 0) = 1;
+            Y(j, 1) = nx; Y(j, 2) = ny; Y(j, 3) = nz;
+            Y(j, 4) = nx * ny; Y(j, 5) = nx * nz; Y(j, 6) = ny * nz;
+            Y(j, 7) = nx * nx - ny * ny; Y(j, 8) = 3 * nz * nz - 1;
+
+            A.row(j*3) = Y.row(j) * ar; b(j*3) = Ir;
+            A.row(j*3+1) = Y.row(j) * ag; b(j*3+1) = Ig;
+            A.row(j*3+2) = Y.row(j) * ab; b(j*3+2) = Ib;
+          }
+          #endif
 
           // ====================================================================
           // solve linear least squares
           // ====================================================================
-          VectorXd l_i = A.jacobiSvd(ComputeThinU | ComputeThinV).solve(b);
-          //VectorXd l_i = (A.transpose() * A).ldlt().solve(A.transpose() * b);
+          //VectorXd l_i = A.jacobiSvd(ComputeThinU | ComputeThinV).solve(b);
+          VectorXd l_i = (A.transpose() * A).ldlt().solve(A.transpose() * b);
           const double relax_factor = 1.0;
           lighting_coeffs[i] = (1.0 - relax_factor) * lighting_coeffs[i] + relax_factor * l_i;
           cout << l_i.transpose() << endl;
@@ -762,7 +801,7 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 10.0;
+          const double lambda2 = 20.0 / (iters + 1);
 
           // ====================================================================
           // collect valid pixels
@@ -974,36 +1013,42 @@ int main(int argc, char **argv) {
 
         // [Shape from shading] step 3: fix albedo and lighting, estimate normal map
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
-        for(int iii=0;iii<5;++iii){
+        for(int iii=0;iii<3;++iii){
           // ====================================================================
           // collect valid pixels
           // ====================================================================
+
+          // @FIXME Still something wrong here
           vector<glm::ivec2> pixel_indices_i;
 
           cv::Mat boundary_pixel_image(num_rows, num_cols, CV_8U);
-          for (int y = 1; y < normal_maps[i].rows-1; ++y) {
-            for (int x = 1; x < normal_maps[i].cols-1; ++x) {
+          cv::Mat valid_pixel_image(num_rows, num_cols, CV_8U);
+          for (int y = 0; y < normal_maps[i].rows; ++y) {
+            for (int x = 0; x < normal_maps[i].cols; ++x) {
               boundary_pixel_image.at<unsigned char>(y, x) = 0;
+              valid_pixel_image.at<unsigned char>(y, x) = 0;
+
               float zval = zmaps[i].at<float>(y, x);
               if (zval < -1e5) continue;
               else {
+                pixel_indices_i.push_back(glm::ivec2(y, x));
+                valid_pixel_image.at<unsigned char>(y, x) = 255;
 
-                bool flag = false;
+                bool flag = face_boundary_indices.count(face_indices_maps[i][y*num_cols+x]);
                 flag |= zmaps[i].at<float>(y-1, x) < -1e5;
                 flag |= zmaps[i].at<float>(y+1, x) < -1e5;
                 flag |= zmaps[i].at<float>(y, x-1) < -1e5;
                 flag |= zmaps[i].at<float>(y, x+1) < -1e5;
 
                 if(flag) boundary_pixel_image.at<unsigned char>(y, x) = 255;
-                else pixel_indices_i.push_back(glm::ivec2(y, x));
               }
             }
           }
 
           for(int r=0;r<num_rows;++r) {
             for(int c=0;c<num_cols;++c) {
-              if(boundary_pixel_image.at<unsigned char>(r, c) == 255 ||
-                 (dz_gradient.at<float>(r, c) > 128.0 && boundary_pixel_image.at<unsigned char>(r, c) < 128)) {
+              if(boundary_pixel_image.at<unsigned char>(r, c) == 255
+              || (dz_gradient.at<float>(r, c) > 128.0 && boundary_pixel_image.at<unsigned char>(r, c) < 128)) {
                 boundary_pixel_image.at<unsigned char>(r, c) = 255;
                 is_boundary[r*num_cols+c] = true;
               }
@@ -1011,6 +1056,7 @@ int main(int argc, char **argv) {
           }
 
           cv::imwrite( (results_path / fs::path("boundary_pixels_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str(), boundary_pixel_image );
+          cv::imwrite( (results_path / fs::path("valid_pixels_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str(), valid_pixel_image );
 
           // ====================================================================
           // collect constraints from valid pixels
@@ -1056,14 +1102,8 @@ int main(int argc, char **argv) {
             int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
 
             cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(r, c);
-            double nx = pix[0], ny = pix[1], nz = pix[2];
-
-            // nx = cos(theta)
-            // ny = sin(theta) * cos(phi)
-            // nz = sin(theta) * sin(phi)
-
-            theta(j) = acos(nx);
-            phi(j) = atan2(nz, ny);
+            const double nx = pix[0], ny = pix[1], nz = pix[2];
+            tie(theta(j), phi(j)) = normal2sphericalcoords(nx, ny, nz);
           }
           VectorXd theta0 = theta, phi0 = phi;
 
@@ -1079,7 +1119,7 @@ int main(int argc, char **argv) {
 
             // data term
             for(int j = 0; j < num_constraints; ++j) {
-              #if USE_ANALYTIC_COST_FUNCTIONS
+              #if 0//USE_ANALYTIC_COST_FUNCTIONS
               ceres::CostFunction *cost_function =
                 new NormalMapDataTerm_analytic(pixels_i(j, 0), pixels_i(j, 1), pixels_i(j, 2),
                                                albedos_i(j, 0), albedos_i(j, 1), albedos_i(j, 2),
@@ -1125,7 +1165,7 @@ int main(int argc, char **argv) {
                 */
                 bool boundary_pixel = is_boundary[pidx];
 
-                #if USE_ANALYTIC_COST_FUNCTIONS
+                #if 0//USE_ANALYTIC_COST_FUNCTIONS
                 ceres::CostFunction *cost_function = new NormalMapIntegrabilityTerm_analytic(dx, dy, boundary_pixel?0:w_integrability);
                 #else
                 ceres::DynamicNumericDiffCostFunction<NormalMapIntegrabilityTerm> *cost_function =
@@ -1134,7 +1174,7 @@ int main(int argc, char **argv) {
                   );
 
                 for(int param_i = 0; param_i < 6; ++param_i) cost_function->AddParameterBlock(1);
-                cost_function->SetNumResiduals(1);
+                cost_function->SetNumResiduals(3);
                 #endif
 
                 problem.AddResidualBlock(cost_function, NULL,
@@ -1144,17 +1184,6 @@ int main(int argc, char **argv) {
               }
             }
             //bad_term_image.save("bad_term.png");
-
-            // regularization term 1: theta and phi regularization
-            /*
-            const double w_angle = 0.0001;
-            for(int j=0;j<num_constraints;++j) {
-              ceres::CostFunction* cost_function_theta = new NormalMapAngleRegularizationTerm(w_angle);
-              problem.AddResidualBlock(cost_function_theta, NULL, theta.data()+j);
-              ceres::CostFunction* cost_function_phi = new NormalMapAngleRegularizationTerm(w_angle);
-              problem.AddResidualBlock(cost_function_phi, NULL, phi.data()+j);
-            }
-            */
 
             // regularization term
             /*
@@ -1203,19 +1232,19 @@ int main(int argc, char **argv) {
             boost::timer::auto_cpu_timer timer_solve(
               "[Shape from shading] Problem solve time = %w seconds.\n");
             ceres::Solver::Options options;
-            options.max_num_iterations = 10;
+            options.max_num_iterations = iters * 5;
             options.num_threads = 8;
             options.num_linear_solver_threads = 8;
 
             options.initial_trust_region_radius = 1;
-            options.min_trust_region_radius = 0.95;
-            options.max_trust_region_radius = 1.05;
-            options.min_lm_diagonal = 0.95;
-            options.max_lm_diagonal = 1.05;
+
+            options.min_trust_region_radius = 1.0;
+            options.max_trust_region_radius = 1.0;
+
+            options.min_lm_diagonal = 1.0;
+            options.max_lm_diagonal = 1.0;
 
             options.minimizer_progress_to_stdout = true;
-            //options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
-            //options.sparse_linear_algebra_library_type = ceres::SUITE_SPARSE;
             ceres::Solver::Summary summary;
             Solve(options, &problem, &summary);
             cout << summary.BriefReport() << endl;
@@ -1227,21 +1256,20 @@ int main(int argc, char **argv) {
 
           const double dlimit_val = 3.1415926535897 * 0.25;
 
-          /*
           for(int j=0;j<num_constraints;++j) {
             int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
             int pidx = r * num_cols + c;
             if(fabs(dtheta(j)) > dlimit_val) is_boundary[pidx] = true;
             if(fabs(dphi(j)) > dlimit_val) is_boundary[pidx] = true;
           }
-          */
 
           VectorXd dlimit = VectorXd::Ones(num_constraints) * dlimit_val;
           dtheta = dtheta.cwiseMax(-dlimit); dtheta = dtheta.cwiseMin(dlimit);
           dphi = dphi.cwiseMax(-dlimit); dphi = dphi.cwiseMin(dlimit);
 
-          theta = theta0 + dtheta;
-          phi = phi0 + dphi;
+          const double angle_update_relax_factor = 1.0;
+          theta = theta0 + dtheta * angle_update_relax_factor;
+          phi = phi0 + dphi * angle_update_relax_factor;
 #endif
 
           // update normal map
@@ -1250,13 +1278,8 @@ int main(int argc, char **argv) {
             int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
             int pidx = r * num_cols + c;
 
-            // nx = cos(theta)
-            // ny = sin(theta) * cos(phi)
-            // nz = sin(theta) * sin(phi)
-
-            double nx = cos(theta(j));
-            double ny = sin(theta(j)) * cos(phi(j));
-            double nz = sin(theta(j)) * sin(phi(j));
+            double nx, ny, nz;
+            tie(nx, ny, nz) = sphericalcoords2normal<double>(theta(j), phi(j));
 
             normal_map_blurred.at<cv::Vec3f>(r, c) = cv::Vec3f(nx, ny, nz);
           }
@@ -1282,14 +1305,23 @@ int main(int argc, char **argv) {
           QImage normal_image(num_cols, num_rows, QImage::Format_ARGB32);
           QImage image_with_albedo_normal_lighting(num_cols, num_rows, QImage::Format_ARGB32);
           QImage image_error(num_cols, num_rows, QImage::Format_ARGB32);
+          QImage integrability_image(num_cols, num_rows, QImage::Format_ARGB32);
+          QImage theta_image(num_cols, num_rows, QImage::Format_ARGB32);
+          QImage phi_image(num_cols, num_rows, QImage::Format_ARGB32);
+
           normal_image.fill(0);
           image_with_albedo_normal_lighting.fill(0);
           image_error.fill(0);
+          integrability_image.fill(0);
+          theta_image.fill(0);
+          phi_image.fill(0);
+
           const int num_dof = 9;
           for (int y = 0; y < num_rows; ++y) {
             for (int x = 0; x < num_cols; ++x) {
               cv::Vec3d pix_albedo = albedos[i].at<cv::Vec3d>(y, x);
-              if (pix_albedo[0] == 0 && pix_albedo[1] == 0 && pix_albedo[2] == 0) {
+              float zval = zmaps[i].at<float>(y, x);
+              if (zval < -1e5) {
                 continue;
               }
               else {
@@ -1324,12 +1356,56 @@ int main(int argc, char **argv) {
                                    fabs(pix_val(1) - qGreen(pix_ij)),
                                    fabs(pix_val(2) - qBlue(pix_ij)));
                 image_error.setPixel(x, y, qRgb(pix_diff(0), pix_diff(1), pix_diff(2)));
+
+                cv::Vec3d pix_u = normal_maps[i].at<cv::Vec3d>(y-1, x);
+                double nx_u, ny_u, nz_u;
+                nx_u = pix_u[0]; ny_u = pix_u[1]; nz_u = pix_u[2];
+
+                cv::Vec3d pix_l = normal_maps[i].at<cv::Vec3d>(y, x-1);
+                double nx_l, ny_l, nz_l;
+                nx_l = pix_l[0]; ny_l = pix_l[1]; nz_l = pix_l[2];
+
+                auto round_off = [](double val, double eps) {
+                  if(fabs(val) < eps) {
+                    return val>0?eps:-eps;
+                  } else return val;
+                };
+                double nxnz = nx / round_off(nz, 1e-16);
+                double nynz = ny / round_off(nz, 1e-16);
+                double nxnz_u = nx_u / round_off(nz_u, 1e-16);
+                double nynz_l = ny_l / round_off(nz_l, 1e-16);
+                double integrability_val = clamp<double>(fabs((nxnz_u - nxnz) - (nynz - nynz_l)) * 255.0, 0, 255);
+                integrability_image.setPixel(x, y, qRgb(integrability_val, integrability_val, integrability_val));
+
+                auto jet_color = [](double ratio) {
+                  double r = max(0.0, min(1.0, (ratio - 0.5) / 0.25));
+                  double g = 0;
+                  double b = 1.0 - max(0.0, min(1.0, (ratio - 0.25) / 0.25 ));
+                  if(ratio < 0.5) {
+                    g = min(1.0, ratio / 0.25);
+                  } else {
+                    g = 1.0 - max(0.0, (ratio - 0.75) / 0.25);
+                  }
+                  return qRgb(r*255, g*255, b*255);
+                };
+
+                // [0, pi], [-pi, pi]
+                double theta_val, phi_val;
+                tie(theta_val, phi_val) = normal2sphericalcoords(nx, ny, nz);
+                double theta_ratio = clamp<double>(theta_val / 3.1415926535897, 0, 1);
+                theta_image.setPixel(x, y, jet_color(theta_ratio));
+
+                double phi_ratio = clamp<double>((phi_val+3.1415926535897)*0.5/3.1415926535897, 0, 1);
+                phi_image.setPixel(x, y, jet_color(phi_ratio));
               }
             }
           }
           normal_image.save( (results_path / fs::path("normal_opt_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
           image_with_albedo_normal_lighting.save( (results_path / fs::path("normal_opt_lighting_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
           image_error.save( (results_path / fs::path("error_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
+          integrability_image.save( (results_path / fs::path("integrability_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
+          theta_image.save( (results_path / fs::path("theta_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
+          phi_image.save( (results_path / fs::path("phi_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
         }
       } // [Shape from shading] main loop
 
@@ -1386,7 +1462,7 @@ int main(int argc, char **argv) {
 #if USE_IMAGE_GRID
         const double w_LoG = 0.0, w_diff = 0.0;
 #else
-        const double w_LoG = 0.05, w_diff = 0.01;
+        const double w_LoG = 0.05, w_diff = 0.025;
 #endif
         // ====================================================================
         // part 1: normal constraints
