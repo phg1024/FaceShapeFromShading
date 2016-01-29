@@ -292,7 +292,7 @@ int main(int argc, char **argv) {
           // take the pixel from the input image through bilinear sampling
           glm::dvec3 texel = bilinear_sample(bundle.image, v_img.x, bundle.image.height()-1-v_img.y);
 
-          if(texel.r == 0 && texel.g == 0 && texel.b == 0) continue;
+          if(texel.r < 0 && texel.g < 0 && texel.b < 0) continue;
 
           mean_texture[i][j] += texel;
           mean_texture_weight[i][j] += 1.0;
@@ -462,8 +462,6 @@ int main(int argc, char **argv) {
       visualizer.SetCameraParameters(bundle.params.params_cam);
       visualizer.SetMeshRotationTranslation(bundle.params.params_model.R, bundle.params.params_model.T);
       visualizer.SetFacesToRender(valid_faces_indices);
-
-      //QImage img = visualizer.Render();
 
       QImage albedo_image = visualizer.Render(true);
 
@@ -700,6 +698,7 @@ int main(int argc, char **argv) {
           VectorXd b(num_constraints * 3);
 
           #if 0
+
           Y.col(0) = VectorXd::Ones(num_constraints);
           Y.col(1) = normals_i.col(0);
           Y.col(2) = normals_i.col(1);
@@ -725,6 +724,7 @@ int main(int argc, char **argv) {
           b.topRows(num_constraints) = pixels_i.col(0);
           b.middleRows(num_constraints, num_constraints) = pixels_i.col(1);
           b.bottomRows(num_constraints) = pixels_i.col(2);
+
           #else
 
           for(int j=0;j<num_constraints;++j) {
@@ -742,15 +742,13 @@ int main(int argc, char **argv) {
             double Ig = qGreen(pix_i) / 255.0;
             double Ib = qBlue(pix_i) / 255.0;
 
-            Y(j, 0) = 1;
-            Y(j, 1) = nx; Y(j, 2) = ny; Y(j, 3) = nz;
-            Y(j, 4) = nx * ny; Y(j, 5) = nx * nz; Y(j, 6) = ny * nz;
-            Y(j, 7) = nx * nx - ny * ny; Y(j, 8) = 3 * nz * nz - 1;
+            Y.row(j) = sphericalharmonics(nx, ny, nz).transpose();
 
             A.row(j*3) = Y.row(j) * ar; b(j*3) = Ir;
             A.row(j*3+1) = Y.row(j) * ag; b(j*3+1) = Ig;
             A.row(j*3+2) = Y.row(j) * ab; b(j*3+2) = Ib;
           }
+
           #endif
 
           // ====================================================================
@@ -773,17 +771,9 @@ int main(int argc, char **argv) {
               if (zval < -1e5) continue;
               else {
                 cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(y, x);
-                VectorXd Y_ij(num_dof);
                 double nx = pix[0], ny = pix[1], nz = pix[2];
-                Y_ij(0) = 1.0;
-                Y_ij(1) = nx;
-                Y_ij(2) = ny;
-                Y_ij(3) = nz;
-                Y_ij(4) = nx * ny;
-                Y_ij(5) = nx * nz;
-                Y_ij(6) = ny * nz;
-                Y_ij(7) = nx * nx - ny * ny;
-                Y_ij(8) = 3 * nz * nz - 1;
+
+                VectorXd Y_ij = sphericalharmonics(nx, ny, nz);
 
                 double LdotY = l_i.transpose() * Y_ij;
                 cv::Vec3d rho(0.5, 0.5, 0.5);
@@ -801,17 +791,17 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 20.0 / (iters + 1);
+          const double lambda2 = 100.0 / iters;
 
           // ====================================================================
           // collect valid pixels
           // ====================================================================
           vector<glm::ivec2> pixel_indices_i;
 
-          for (int y = 0; y < normal_maps[i].rows; ++y) {
-            for (int x = 0; x < normal_maps[i].cols; ++x) {
-              cv::Vec3d pix = albedos[i].at<cv::Vec3d>(y, x);
-              if (pix[0] == 0 && pix[1] == 0 && pix[2] == 0) continue;
+          for (int y = 0; y < num_rows; ++y) {
+            for (int x = 0; x < num_cols; ++x) {
+              float zval = zmaps[i].at<float>(y, x);
+              if (zval < -1e5) continue;
               else {
                 pixel_indices_i.push_back(glm::ivec2(y, x));
               }
@@ -856,6 +846,8 @@ int main(int argc, char **argv) {
           const int num_dof = 9;  // use first order approximation
           MatrixXd Y(num_constraints, num_dof);
 
+          #if 0
+
           Y.col(0) = VectorXd::Ones(num_constraints);
           Y.col(1) = normals_i.col(0);
           Y.col(2) = normals_i.col(1);
@@ -865,6 +857,18 @@ int main(int argc, char **argv) {
           Y.col(6) = normals_i.col(1).cwiseProduct(normals_i.col(2));
           Y.col(7) = normals_i.col(0).cwiseProduct(normals_i.col(0)) - normals_i.col(1).cwiseProduct(normals_i.col(1));
           Y.col(8) = 3 * normals_i.col(2).cwiseProduct(normals_i.col(2)) - VectorXd::Ones(num_constraints);
+
+          #else
+          for(int j=0;j<num_constraints;++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+
+            cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(r, c);
+            double nx, ny, nz;
+            nx = pix[0], ny = pix[1], nz = pix[2];
+
+            Y.row(j) = sphericalharmonics(nx, ny, nz).transpose();
+          }
+          #endif
 
           VectorXd LdotY = Y * lighting_coeffs[i];
 
@@ -980,17 +984,9 @@ int main(int argc, char **argv) {
               }
               else {
                 cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(y, x);
-                VectorXd Y_ij(num_dof);
+
                 double nx = pix[0], ny = pix[1], nz = pix[2];
-                Y_ij(0) = 1.0;
-                Y_ij(1) = nx;
-                Y_ij(2) = ny;
-                Y_ij(3) = nz;
-                Y_ij(4) = nx * ny;
-                Y_ij(5) = nx * nz;
-                Y_ij(6) = ny * nz;
-                Y_ij(7) = nx * nx - ny * ny;
-                Y_ij(8) = 3 * nz * nz - 1;
+                VectorXd Y_ij = sphericalharmonics(nx, ny, nz);
 
                 double LdotY = lighting_coeffs[i].transpose() * Y_ij;
                 cv::Vec3d pix_val = cv::Vec3d(rho(y*num_cols+x, 0), rho(y*num_cols+x, 1), rho(y*num_cols+x, 2));
@@ -1034,7 +1030,7 @@ int main(int argc, char **argv) {
                 pixel_indices_i.push_back(glm::ivec2(y, x));
                 valid_pixel_image.at<unsigned char>(y, x) = 255;
 
-                bool flag = face_boundary_indices.count(face_indices_maps[i][y*num_cols+x]);
+                bool flag = false;//face_boundary_indices.count(face_indices_maps[i][y*num_cols+x]);
                 flag |= zmaps[i].at<float>(y-1, x) < -1e5;
                 flag |= zmaps[i].at<float>(y+1, x) < -1e5;
                 flag |= zmaps[i].at<float>(y, x-1) < -1e5;
@@ -1045,10 +1041,32 @@ int main(int argc, char **argv) {
             }
           }
 
+          // Filter out edges
           for(int r=0;r<num_rows;++r) {
             for(int c=0;c<num_cols;++c) {
-              if(boundary_pixel_image.at<unsigned char>(r, c) == 255
-              || (dz_gradient.at<float>(r, c) > 128.0 && boundary_pixel_image.at<unsigned char>(r, c) < 128)) {
+              cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(r, c);
+              double nx = pix[0], ny = pix[1], nz = pix[2];
+
+              cv::Vec3d pix_u = normal_maps[i].at<cv::Vec3d>(r-1, c);
+              double nx_u, ny_u, nz_u;
+              nx_u = pix_u[0]; ny_u = pix_u[1]; nz_u = pix_u[2];
+
+              cv::Vec3d pix_l = normal_maps[i].at<cv::Vec3d>(r, c-1);
+              double nx_l, ny_l, nz_l;
+              nx_l = pix_l[0]; ny_l = pix_l[1]; nz_l = pix_l[2];
+
+              auto round_off = [](double val, double eps) {
+                if(fabs(val) < eps) {
+                  return val>0?eps:-eps;
+                } else return val;
+              };
+              double nxnz = nx / round_off(nz, 1e-16);
+              double nynz = ny / round_off(nz, 1e-16);
+              double nxnz_u = nx_u / round_off(nz_u, 1e-16);
+              double nynz_l = ny_l / round_off(nz_l, 1e-16);
+              double integrability_val = clamp<double>(fabs((nxnz_u - nxnz) - (nynz - nynz_l)) * 255.0, 0, 255);
+
+              if(integrability_val > 64.0) {
                 boundary_pixel_image.at<unsigned char>(r, c) = 255;
                 is_boundary[r*num_cols+c] = true;
               }
@@ -1119,7 +1137,7 @@ int main(int argc, char **argv) {
 
             // data term
             for(int j = 0; j < num_constraints; ++j) {
-              #if 0//USE_ANALYTIC_COST_FUNCTIONS
+              #if USE_ANALYTIC_COST_FUNCTIONS
               ceres::CostFunction *cost_function =
                 new NormalMapDataTerm_analytic(pixels_i(j, 0), pixels_i(j, 1), pixels_i(j, 2),
                                                albedos_i(j, 0), albedos_i(j, 1), albedos_i(j, 2),
@@ -1134,7 +1152,7 @@ int main(int argc, char **argv) {
 
               cost_function->AddParameterBlock(1);
               cost_function->AddParameterBlock(1);
-              cost_function->SetNumResiduals(3);
+              cost_function->SetNumResiduals(1);
               #endif
               problem.AddResidualBlock(cost_function, NULL, theta.data()+j, phi.data()+j);
             }
@@ -1165,7 +1183,7 @@ int main(int argc, char **argv) {
                 */
                 bool boundary_pixel = is_boundary[pidx];
 
-                #if 0//USE_ANALYTIC_COST_FUNCTIONS
+                #if USE_ANALYTIC_COST_FUNCTIONS
                 ceres::CostFunction *cost_function = new NormalMapIntegrabilityTerm_analytic(dx, dy, boundary_pixel?0:w_integrability);
                 #else
                 ceres::DynamicNumericDiffCostFunction<NormalMapIntegrabilityTerm> *cost_function =
@@ -1174,7 +1192,7 @@ int main(int argc, char **argv) {
                   );
 
                 for(int param_i = 0; param_i < 6; ++param_i) cost_function->AddParameterBlock(1);
-                cost_function->SetNumResiduals(3);
+                cost_function->SetNumResiduals(1);
                 #endif
 
                 problem.AddResidualBlock(cost_function, NULL,
@@ -1326,17 +1344,9 @@ int main(int argc, char **argv) {
               }
               else {
                 cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(y, x);
-                VectorXd Y_ij(num_dof);
                 double nx = pix[0], ny = pix[1], nz = pix[2];
-                Y_ij(0) = 1.0;
-                Y_ij(1) = nx;
-                Y_ij(2) = ny;
-                Y_ij(3) = nz;
-                Y_ij(4) = nx * ny;
-                Y_ij(5) = nx * nz;
-                Y_ij(6) = ny * nz;
-                Y_ij(7) = nx * nx - ny * ny;
-                Y_ij(8) = 3 * nz * nz - 1;
+
+                VectorXd Y_ij = sphericalharmonics(nx, ny, nz);
 
                 normal_image.setPixel(x, y, qRgb((nx+1)*0.5*255.0,
                                                  (ny+1)*0.5*255.0,

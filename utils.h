@@ -23,6 +23,55 @@ tuple<T, T, T> sphericalcoords2normal(double theta, double phi) {
   return make_tuple(cos(theta), sin(theta)*sin(phi), sin(theta)*cos(phi));
 }
 
+inline Vector3d dnormal_dtheta(double theta, double phi) {
+  // nx = cos(theta)
+  // ny = sin(theta) * sin(phi)
+  // nz = sin(theta) * cos(phi)
+
+  // dnx_dtheta = -sin(theta)
+  // dny_dtheta = cos(theta) * sin(phi)
+  // dnz_dtheta = cos(theta) * cos(phi)
+  return Vector3d(-sin(theta), cos(theta)*sin(phi), cos(theta)*cos(phi));
+}
+
+inline Vector3d dnormal_dphi(double theta, double phi) {
+  // nx = cos(theta)
+  // ny = sin(theta) * sin(phi)
+  // nz = sin(theta) * cos(phi)
+
+  // dnx_dtheta = 0
+  // dny_dtheta = sin(theta) * cos(phi)
+  // dnz_dtheta = sin(theta) * -sin(phi)
+  return Vector3d(0, sin(theta)*cos(phi), -sin(theta)*sin(phi));
+}
+
+inline VectorXd sphericalharmonics(double nx, double ny, double nz) {
+  VectorXd Y(9);
+  Y(0) = 1.0;
+  Y(1) = nx; Y(2) = ny; Y(3) = nz;
+  Y(4) = nx * ny; Y(5) = nx * nz; Y(6) = ny * nz;
+  Y(7) = nx * nx - ny * ny; Y(8) = 3 * nz * nz - 1;
+  return Y;
+}
+
+inline MatrixXd dY_dnormal(double nx, double ny, double nz) {
+  MatrixXd dYdnormal(9, 3);
+  dYdnormal(0, 0) = 0; dYdnormal(0, 1) = 0; dYdnormal(0, 2) = 0;
+
+  dYdnormal(1, 0) = 1; dYdnormal(1, 1) = 0; dYdnormal(1, 2) = 0;
+  dYdnormal(2, 0) = 0; dYdnormal(2, 1) = 1; dYdnormal(2, 2) = 0;
+  dYdnormal(3, 0) = 0; dYdnormal(3, 1) = 0; dYdnormal(3, 2) = 1;
+
+  dYdnormal(4, 0) = ny; dYdnormal(4, 1) = nx; dYdnormal(4, 2) = 0;
+  dYdnormal(5, 0) = nz; dYdnormal(5, 1) = 0; dYdnormal(5, 2) = nx;
+  dYdnormal(6, 0) = 0; dYdnormal(6, 1) = nz; dYdnormal(6, 2) = ny;
+
+  dYdnormal(7, 0) = 2*nx; dYdnormal(7, 1) = -2*ny; dYdnormal(7, 2) = 0;
+  dYdnormal(8, 0) = 0; dYdnormal(8, 1) = 0; dYdnormal(8, 2) = 6 * nz;
+
+  return dYdnormal;
+}
+
 template <typename T>
 T clamp(T val, T lower, T upper) {
   return std::max(lower, std::min(upper, val));
@@ -43,8 +92,8 @@ inline glm::dvec3 bilinear_sample(const QImage& img, double x, double y) {
   int x0 = floor(x), x1 = x0 + 1;
   int y0 = floor(y), y1 = y0 + 1;
 
-  if(x0 < 0 || y0 < 0) return glm::dvec3(0, 0, 0);
-  if(x1 >= img.width() || y1 >= img.height()) return glm::dvec3(0, 0, 0);
+  if(x0 < 0 || y0 < 0) return glm::dvec3(-1, -1, -1);
+  if(x1 >= img.width() || y1 >= img.height()) return glm::dvec3(-1, -1, -1);
 
   double c0 = x - x0, c0c = 1 - c0;
   double c1 = y - y0, c1c = 1 - c1;
