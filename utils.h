@@ -10,39 +10,39 @@
 template <typename T>
 pair<T, T> normal2sphericalcoords(T nx, T ny, T nz) {
   // nx = cos(theta)
-  // ny = sin(theta) * sin(phi)
-  // nz = sin(theta) * cos(phi)
-  return make_pair(acos(nx), atan2(ny, nz));
+  // ny = sin(theta) * cos(phi)
+  // nz = sin(theta) * sin(phi)
+  return make_pair(acos(nx), atan2(nz, ny));
 }
 
 template <typename T>
 tuple<T, T, T> sphericalcoords2normal(double theta, double phi) {
   // nx = cos(theta)
-  // ny = sin(theta) * sin(phi)
-  // nz = sin(theta) * cos(phi)
-  return make_tuple(cos(theta), sin(theta)*sin(phi), sin(theta)*cos(phi));
+  // ny = sin(theta) * cos(phi)
+  // nz = sin(theta) * sin(phi)
+  return make_tuple(cos(theta), sin(theta)*cos(phi), sin(theta)*sin(phi));
 }
 
 inline Vector3d dnormal_dtheta(double theta, double phi) {
   // nx = cos(theta)
-  // ny = sin(theta) * sin(phi)
-  // nz = sin(theta) * cos(phi)
+  // ny = sin(theta) * cos(phi)
+  // nz = sin(theta) * sin(phi)
 
   // dnx_dtheta = -sin(theta)
-  // dny_dtheta = cos(theta) * sin(phi)
-  // dnz_dtheta = cos(theta) * cos(phi)
-  return Vector3d(-sin(theta), cos(theta)*sin(phi), cos(theta)*cos(phi));
+  // dny_dtheta = cos(theta) * cos(phi)
+  // dnz_dtheta = cos(theta) * sin(phi)
+  return Vector3d(-sin(theta), cos(theta)*cos(phi), cos(theta)*sin(phi));
 }
 
 inline Vector3d dnormal_dphi(double theta, double phi) {
   // nx = cos(theta)
-  // ny = sin(theta) * sin(phi)
-  // nz = sin(theta) * cos(phi)
+  // ny = sin(theta) * cos(phi)
+  // nz = sin(theta) * sin(phi)
 
   // dnx_dtheta = 0
-  // dny_dtheta = sin(theta) * cos(phi)
-  // dnz_dtheta = sin(theta) * -sin(phi)
-  return Vector3d(0, sin(theta)*cos(phi), -sin(theta)*sin(phi));
+  // dny_dtheta = -sin(theta) * sin(phi)
+  // dnz_dtheta = sin(theta) * cos(phi)
+  return Vector3d(0, -sin(theta)*sin(phi), sin(theta)*cos(phi));
 }
 
 inline VectorXd sphericalharmonics(double nx, double ny, double nz) {
@@ -140,16 +140,39 @@ inline MatrixXd ComputeLoGKernel(int k, double sigma) {
   MatrixXd kernel(2*k+1, 2*k+1);
   const double sigma2 = sigma * sigma;
   const double sigma4 = sigma2 * sigma2;
+  const double sigma6 = sigma2 * sigma4;
+
+  double S = 0.0;
   for(int y=-k, i=0;y<=k;++y, ++i) {
     double y2 = y * y;
     for(int x=-k, j=0;x<=k;++x, ++j) {
       double x2 = x * x;
-      double val = (x2 + y2) / (2 * sigma2);
-      kernel(i, j) = (val - 1) * exp(-val);
+      double val = exp(-(x2 + y2) / (2 * sigma2));
+      kernel(i, j) = val;
+      S += val;
     }
   }
+
   const double PI = 3.1415926535897;
-  kernel /= (PI * sigma4);
+  double S2 = 0.0;
+  for(int y=-k, i=0;y<=k;++y, ++i) {
+    double y2 = y * y;
+    for(int x=-k, j=0;x<=k;++x, ++j) {
+      double x2 = x * x;
+      kernel(i, j) *= (x2 + y2 - 2 * sigma2);
+      kernel(i, j) /= S;
+      S2 += kernel(i, j);
+    }
+  }
+
+  S2 /= ((2*k+1) * (2*k+1));
+
+  for(int i=0;i<2*k+1;++i) {
+    for(int j=0;j<2*k+1;++j) {
+      kernel(i, j) -= S2;
+    }
+  }
+
   return kernel;
 }
 

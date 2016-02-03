@@ -18,7 +18,7 @@
 
 #include "common.h"
 #include "cost_functions.h"
-#include "OffscreenMeshVisualizer.h"
+#include "MultilinearReconstruction/OffscreenMeshVisualizer.h"
 #include "utils.h"
 
 #include "ceres/ceres.h"
@@ -66,6 +66,7 @@ int main(int argc, char **argv) {
   const string landmarks_filename("/home/phg/Data/Multilinear/landmarks_73.txt");
   const string albedo_index_map_filename("/home/phg/Data/Multilinear/albedo_index.png");
   const string albedo_pixel_map_filename("/home/phg/Data/Multilinear/albedo_pixel.png");
+  const string mean_albedo_filename("/home/phg/Data/Texture/mean_texture.png");
 
   const string valid_faces_indices_filename("/home/phg/Data/Multilinear/face_region_indices.txt");
   const string face_boundary_indices_filename("/home/phg/Data/Multilinear/face_boundary_indices.txt");
@@ -216,6 +217,7 @@ int main(int argc, char **argv) {
   vector<vector<double>> mean_texture_weight(tex_size, vector<double>(tex_size, 0));
 
   // Collect texture information from each input (image, mesh) pair to obtain mean texture
+  bool generate_mean_texture = true;
   QImage mean_texture_image;
   vector<vector<int>> face_indices_maps;
   {
@@ -270,53 +272,59 @@ int main(int argc, char **argv) {
       }
       img_vertices.save("mesh_with_vertices.png");
 
-      // for each pixel in the texture map, use backward projection to obtain pixel value in the input image
-      // accumulate the texels in average texel map
-      for(int i=0;i<tex_size;++i) {
-        for(int j=0;j<tex_size;++j) {
-          PixelInfo pix_ij = albedo_pixel_map[i][j];
+      if(generate_mean_texture) {
+        // for each pixel in the texture map, use backward projection to obtain pixel value in the input image
+        // accumulate the texels in average texel map
+        for(int i=0;i<tex_size;++i) {
+          for(int j=0;j<tex_size;++j) {
+            PixelInfo pix_ij = albedo_pixel_map[i][j];
 
-          // skip if the triangle is not visible
-          if(triangles.find(pix_ij.fidx) == triangles.end()) continue;
+            // skip if the triangle is not visible
+            if(triangles.find(pix_ij.fidx) == triangles.end()) continue;
 
-          auto face_i = mesh.face(pix_ij.fidx);
+            auto face_i = mesh.face(pix_ij.fidx);
 
-          auto v0_mesh = mesh.vertex(face_i[0]);
-          auto v1_mesh = mesh.vertex(face_i[1]);
-          auto v2_mesh = mesh.vertex(face_i[2]);
+            auto v0_mesh = mesh.vertex(face_i[0]);
+            auto v1_mesh = mesh.vertex(face_i[1]);
+            auto v2_mesh = mesh.vertex(face_i[2]);
 
-          auto v = v0_mesh * pix_ij.bcoords.x + v1_mesh * pix_ij.bcoords.y + v2_mesh * pix_ij.bcoords.z;
+            auto v = v0_mesh * pix_ij.bcoords.x + v1_mesh * pix_ij.bcoords.y + v2_mesh * pix_ij.bcoords.z;
 
-          glm::dvec3 v_img = ProjectPoint(glm::dvec3(v[0], v[1], v[2]), Mview, bundle.params.params_cam);
+            glm::dvec3 v_img = ProjectPoint(glm::dvec3(v[0], v[1], v[2]), Mview, bundle.params.params_cam);
 
-          // take the pixel from the input image through bilinear sampling
-          glm::dvec3 texel = bilinear_sample(bundle.image, v_img.x, bundle.image.height()-1-v_img.y);
+            // take the pixel from the input image through bilinear sampling
+            glm::dvec3 texel = bilinear_sample(bundle.image, v_img.x, bundle.image.height()-1-v_img.y);
 
-          if(texel.r < 0 && texel.g < 0 && texel.b < 0) continue;
+            if(texel.r < 0 && texel.g < 0 && texel.b < 0) continue;
 
-          mean_texture[i][j] += texel;
-          mean_texture_weight[i][j] += 1.0;
+            mean_texture[i][j] += texel;
+            mean_texture_weight[i][j] += 1.0;
+          }
         }
       }
     }
 
     // [Optional]: render the mesh with texture to verify the texel values
-    mean_texture_image = QImage(tex_size, tex_size, QImage::Format_ARGB32);
-    mean_texture_image.fill(0);
-    for(int i=0;i<tex_size;++i) {
-      for (int j = 0; j < (tex_size/2); ++j) {
-        double weight_ij = mean_texture_weight[i][j];
-        double weight_ij_s = mean_texture_weight[i][tex_size-1-j];
+    if(generate_mean_texture) {
+      mean_texture_image = QImage(tex_size, tex_size, QImage::Format_ARGB32);
+      mean_texture_image.fill(0);
+      for(int i=0;i<tex_size;++i) {
+        for (int j = 0; j < (tex_size/2); ++j) {
+          double weight_ij = mean_texture_weight[i][j];
+          double weight_ij_s = mean_texture_weight[i][tex_size-1-j];
 
-        if(weight_ij == 0 && weight_ij_s == 0) continue;
-        else {
-          glm::dvec3 texel = (mean_texture[i][j] + mean_texture[i][tex_size-1-j]) / (weight_ij + weight_ij_s);
-          mean_texture[i][j] = texel;
-          mean_texture[i][tex_size-1-j] = texel;
-          mean_texture_image.setPixel(j, i, qRgb(texel.r, texel.g, texel.b));
-          mean_texture_image.setPixel(tex_size-1-j, i, qRgb(texel.r, texel.g, texel.b));
+          if(weight_ij == 0 && weight_ij_s == 0) continue;
+          else {
+            glm::dvec3 texel = (mean_texture[i][j] + mean_texture[i][tex_size-1-j]) / (weight_ij + weight_ij_s);
+            mean_texture[i][j] = texel;
+            mean_texture[i][tex_size-1-j] = texel;
+            mean_texture_image.setPixel(j, i, qRgb(texel.r, texel.g, texel.b));
+            mean_texture_image.setPixel(tex_size-1-j, i, qRgb(texel.r, texel.g, texel.b));
+          }
         }
       }
+    } else {
+      mean_texture_image = QImage(mean_albedo_filename.c_str());
     }
     mean_texture_image.save( (results_path / fs::path("mean_texture.png")).string().c_str() );
   }
@@ -400,7 +408,7 @@ int main(int argc, char **argv) {
           // 0~255 range
           double nx = qRed(pix) / 255.0 * 2.0 - 1.0;
           double ny = qGreen(pix) / 255.0 * 2.0 - 1.0;
-          double nz = qBlue(pix) / 255.0 * 2.0 - 1.0;
+          double nz = max(0.0, qBlue(pix) / 255.0 * 2.0 - 1.0);
 
           double theta, phi;
           tie(theta, phi) = normal2sphericalcoords<double>(nx, ny, nz);
@@ -543,6 +551,8 @@ int main(int argc, char **argv) {
         }
       }
 
+      cout << LoG_kernel << endl;
+
       cv::filter2D(albedos_ref[i], albedos_ref_LoG[i], -1, LoG_kernel, cv::Point(-1, -1), 0, cv::BORDER_REPLICATE);
       cv::imwrite( (results_path / fs::path("albedo_LoG" + std::to_string(i) + ".png")).string(), (albedos_ref_LoG[i] + 0.5) * 255.0);
 
@@ -644,7 +654,7 @@ int main(int argc, char **argv) {
           for(int j=1;j<nbins;++j) {
             counter[j] += counter[j-1];
           }
-          const double lighting_pixels_ratio_lower = 0.95;
+          const double lighting_pixels_ratio_lower = 1.00;
           const double lighting_pixels_ratio_upper = 1.00;
           double lighting_pixels_ratio = iters / (double)max_iters * lighting_pixels_ratio_upper + (1.0 - iters / (double) max_iters) * lighting_pixels_ratio_lower;
           const int cutoff_count = *std::lower_bound(counter.begin(), counter.end(), static_cast<int>(lighting_pixels_ratio*albedo_distances_i_sorted.size()));
@@ -791,7 +801,7 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 100.0 / iters;
+          const double lambda2 = 500.0;
 
           // ====================================================================
           // collect valid pixels
@@ -1010,11 +1020,10 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 3: fix albedo and lighting, estimate normal map
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         for(int iii=0;iii<3;++iii){
+
           // ====================================================================
           // collect valid pixels
           // ====================================================================
-
-          // @FIXME Still something wrong here
           vector<glm::ivec2> pixel_indices_i;
 
           cv::Mat boundary_pixel_image(num_rows, num_cols, CV_8U);
@@ -1036,7 +1045,10 @@ int main(int argc, char **argv) {
                 flag |= zmaps[i].at<float>(y, x-1) < -1e5;
                 flag |= zmaps[i].at<float>(y, x+1) < -1e5;
 
-                if(flag) boundary_pixel_image.at<unsigned char>(y, x) = 255;
+                if(flag) {
+                  boundary_pixel_image.at<unsigned char>(y, x) = 255;
+                  is_boundary[y*num_cols+x] = true;
+                }
               }
             }
           }
@@ -1126,8 +1138,9 @@ int main(int argc, char **argv) {
           VectorXd theta0 = theta, phi0 = phi;
 
           const double w_data = 1.0;
-          const double w_reg = 0.0;
+          const double w_reg = 0.1;
           const double w_integrability = 1.0;
+          const double w_smoothness = 0.1;
 
           #define USE_ANALYTIC_COST_FUNCTIONS 1
           PhGUtils::message("Assembling cost functions ...");
@@ -1152,7 +1165,7 @@ int main(int argc, char **argv) {
 
               cost_function->AddParameterBlock(1);
               cost_function->AddParameterBlock(1);
-              cost_function->SetNumResiduals(1);
+              cost_function->SetNumResiduals(3);
               #endif
               problem.AddResidualBlock(cost_function, NULL, theta.data()+j, phi.data()+j);
             }
@@ -1203,8 +1216,47 @@ int main(int argc, char **argv) {
             }
             //bad_term_image.save("bad_term.png");
 
+            // smoothness term
+            #if 0
+            for(int j = 0; j < num_constraints; ++j) {
+              int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+              int pidx = r * num_cols + c;
+              if(c < 1 || r < 1 || c >= num_cols || r >= num_rows) continue;
+
+              int left_idx = pidx - 1;
+              int up_idx = pidx - num_cols;
+
+              if(is_valid_pixel[left_idx] && is_valid_pixel[up_idx]) {
+                double dx = 1, dy = 1;
+                /*
+                cv::Vec3d depth_ij = depth_maps[i].at<cv::Vec3d>(r, c);
+                cv::Vec3d depth_ij_l = depth_maps[i].at<cv::Vec3d>(r, c-1);
+                cv::Vec3d depth_ij_u = depth_maps[i].at<cv::Vec3d>(r-1, c);
+                dx = depth_ij[0] - depth_ij_l[0];
+                dy = depth_ij[1] - depth_ij_u[0];
+                */
+                bool boundary_pixel = is_boundary[pidx];
+
+                #if 0//USE_ANALYTIC_COST_FUNCTIONS
+                ceres::CostFunction *cost_function = new NormalMapIntegrabilityTerm_analytic(dx, dy, boundary_pixel?0:w_integrability);
+                #else
+                ceres::DynamicNumericDiffCostFunction<NormalMapSmoothnessTerm> *cost_function =
+                  new ceres::DynamicNumericDiffCostFunction<NormalMapSmoothnessTerm>(
+                    new NormalMapSmoothnessTerm(dx, dy, boundary_pixel?0:w_smoothness)
+                  );
+
+                for(int param_i = 0; param_i < 6; ++param_i) cost_function->AddParameterBlock(1);
+                cost_function->SetNumResiduals(4);
+                #endif
+
+                problem.AddResidualBlock(cost_function, NULL,
+                                         theta.data()+j, phi.data()+j,
+                                         theta.data()+pixel_index_map[left_idx], phi.data()+pixel_index_map[left_idx],
+                                         theta.data()+pixel_index_map[up_idx], phi.data()+pixel_index_map[up_idx]);
+              }
+            }
+
             // regularization term
-            /*
             for(int j = 0; j < num_constraints; ++j) {
               int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
               int pidx = r * num_cols + c;
@@ -1240,7 +1292,7 @@ int main(int argc, char **argv) {
                 problem.AddResidualBlock(cost_function, NULL, params_ptrs);
               }
             }
-            */
+            #endif
           }
 
           PhGUtils::message("done.");
@@ -1250,14 +1302,14 @@ int main(int argc, char **argv) {
             boost::timer::auto_cpu_timer timer_solve(
               "[Shape from shading] Problem solve time = %w seconds.\n");
             ceres::Solver::Options options;
-            options.max_num_iterations = iters * 5;
+            options.max_num_iterations = 3;
             options.num_threads = 8;
             options.num_linear_solver_threads = 8;
 
-            options.initial_trust_region_radius = 1;
+            options.initial_trust_region_radius = 10.0;
 
-            options.min_trust_region_radius = 1.0;
-            options.max_trust_region_radius = 1.0;
+            //options.min_trust_region_radius = 1.0;
+            //options.max_trust_region_radius = 1.0;
 
             options.min_lm_diagonal = 1.0;
             options.max_lm_diagonal = 1.0;
@@ -1274,6 +1326,7 @@ int main(int argc, char **argv) {
 
           const double dlimit_val = 3.1415926535897 * 0.25;
 
+          /*
           for(int j=0;j<num_constraints;++j) {
             int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
             int pidx = r * num_cols + c;
@@ -1284,8 +1337,9 @@ int main(int argc, char **argv) {
           VectorXd dlimit = VectorXd::Ones(num_constraints) * dlimit_val;
           dtheta = dtheta.cwiseMax(-dlimit); dtheta = dtheta.cwiseMin(dlimit);
           dphi = dphi.cwiseMax(-dlimit); dphi = dphi.cwiseMin(dlimit);
+          */
 
-          const double angle_update_relax_factor = 1.0;
+          const double angle_update_relax_factor = 0.5;
           theta = theta0 + dtheta * angle_update_relax_factor;
           phi = phi0 + dphi * angle_update_relax_factor;
 #endif
@@ -1298,11 +1352,13 @@ int main(int argc, char **argv) {
 
             double nx, ny, nz;
             tie(nx, ny, nz) = sphericalcoords2normal<double>(theta(j), phi(j));
+            nz = max(0.0, nz);
 
             normal_map_blurred.at<cv::Vec3f>(r, c) = cv::Vec3f(nx, ny, nz);
           }
 
           #if 0
+          // @FIXME fill the holes
           if(iters < max_iters - 1) {
             cv::medianBlur(normal_map_blurred, normal_map_blurred, 3);
           }
@@ -1470,9 +1526,9 @@ int main(int argc, char **argv) {
         vector<Tripletd> A_coeffs;
         VectorXd B(num_constraints * 4);
 #if USE_IMAGE_GRID
-        const double w_LoG = 0.0, w_diff = 0.0;
+        const double w_LoG = 0.01, w_diff = 0.0;
 #else
-        const double w_LoG = 0.05, w_diff = 0.025;
+        const double w_LoG = 0.01, w_diff = 0.01;
 #endif
         // ====================================================================
         // part 1: normal constraints
@@ -1543,7 +1599,7 @@ int main(int argc, char **argv) {
             tie(qidx, val_LoG) = p;
 
             bool boundary_pixel = is_boundary[pidx] || is_boundary[qidx];
-            double w_pixel = boundary_pixel?1.0:1.0;
+            double w_pixel = boundary_pixel?0.0:1.0;
 
             auto good_LoG = [&](int pixel_index) {
               int y = pixel_index / num_cols, x = pixel_index % num_cols;
@@ -1579,7 +1635,7 @@ int main(int argc, char **argv) {
           int new_j = j;
 
           bool boundary_pixel = is_boundary[pidx];
-          double w_discont = boundary_pixel?2.0:1.0;
+          double w_discont = boundary_pixel?10.0:1.0;
 
           A_coeffs.push_back(Tripletd(new_i, new_j, w_diff*w_discont));
           B(new_i) = depth_map_i.at<double>(r, c) * w_diff*w_discont;
