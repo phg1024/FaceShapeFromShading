@@ -19,6 +19,7 @@
 #include "common.h"
 #include "cost_functions.h"
 #include "MultilinearReconstruction/OffscreenMeshVisualizer.h"
+#include "MultilinearReconstruction/statsutils.h"
 #include "utils.h"
 
 #include "ceres/ceres.h"
@@ -214,6 +215,7 @@ int main(int argc, char **argv) {
 
   MultilinearModel model(model_filename);
   vector<vector<glm::dvec3>> mean_texture(tex_size, vector<glm::dvec3>(tex_size, glm::dvec3(0, 0, 0)));
+  cv::Mat mean_texture_mat(tex_size, tex_size, CV_64FC3);
   vector<vector<double>> mean_texture_weight(tex_size, vector<double>(tex_size, 0));
 
   // Collect texture information from each input (image, mesh) pair to obtain mean texture
@@ -313,20 +315,40 @@ int main(int argc, char **argv) {
           double weight_ij = mean_texture_weight[i][j];
           double weight_ij_s = mean_texture_weight[i][tex_size-1-j];
 
-          if(weight_ij == 0 && weight_ij_s == 0) continue;
-          else {
+          if(weight_ij == 0 && weight_ij_s == 0) {
+            mean_texture_mat.at<cv::Vec3d>(i, j) = cv::Vec3d(0, 0, 0);
+            continue;
+          } else {
             glm::dvec3 texel = (mean_texture[i][j] + mean_texture[i][tex_size-1-j]) / (weight_ij + weight_ij_s);
             mean_texture[i][j] = texel;
             mean_texture[i][tex_size-1-j] = texel;
             mean_texture_image.setPixel(j, i, qRgb(texel.r, texel.g, texel.b));
             mean_texture_image.setPixel(tex_size-1-j, i, qRgb(texel.r, texel.g, texel.b));
+
+            mean_texture_mat.at<cv::Vec3d>(i, j) = cv::Vec3d(texel.x, texel.y, texel.z);
+            mean_texture_mat.at<cv::Vec3d>(i, tex_size-1-j) = cv::Vec3d(texel.x, texel.y, texel.z);
           }
         }
       }
+      cv::resize(mean_texture_mat, mean_texture_mat, cv::Size(), 0.25, 0.25);
+      cv::Mat mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_mat, 20.0, 30.0, 0.01);
+      cv::resize(mean_texture_refined_mat, mean_texture_refined_mat, cv::Size(), 4.0, 4.0);
+
+      QImage mean_texture_image_refined(tex_size, tex_size, QImage::Format_ARGB32);
+      for(int i=0;i<tex_size;++i) {
+        for(int j=0;j<tex_size;++j) {
+          cv::Vec3d pix = mean_texture_refined_mat.at<cv::Vec3d>(i, j);
+          mean_texture_image_refined.setPixel(j, i, qRgb(pix[0], pix[1], pix[2]));
+        }
+      }
+
+      mean_texture_image.save( (results_path / fs::path("mean_texture.png")).string().c_str() );
+      mean_texture_image_refined.save( (results_path / fs::path("mean_texture_refined.png")).string().c_str() );
+      mean_texture_image = mean_texture_image_refined;
     } else {
       mean_texture_image = QImage(mean_albedo_filename.c_str());
+      mean_texture_image.save( (results_path / fs::path("mean_texture.png")).string().c_str() );
     }
-    mean_texture_image.save( (results_path / fs::path("mean_texture.png")).string().c_str() );
   }
 
   // [Shape from shading]
@@ -801,7 +823,7 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 500.0;
+          const double lambda2 = 500.0 / iters;
 
           // ====================================================================
           // collect valid pixels
