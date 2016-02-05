@@ -110,6 +110,30 @@ inline glm::dvec3 bilinear_sample(const QImage& img, double x, double y) {
   return glm::dvec3(r, g, b);
 }
 
+inline QRgb jet_color_QRgb(double ratio) {
+  double r = max(0.0, min(1.0, (ratio - 0.5) / 0.25));
+  double g = 0;
+  double b = 1.0 - max(0.0, min(1.0, (ratio - 0.25) / 0.25 ));
+  if(ratio < 0.5) {
+    g = min(1.0, ratio / 0.25);
+  } else {
+    g = 1.0 - max(0.0, (ratio - 0.75) / 0.25);
+  }
+  return qRgb(r*255, g*255, b*255);
+}
+
+inline glm::dvec3 jet_color(double ratio) {
+  double r = max(0.0, min(1.0, (ratio - 0.5) / 0.25));
+  double g = 0;
+  double b = 1.0 - max(0.0, min(1.0, (ratio - 0.25) / 0.25 ));
+  if(ratio < 0.5) {
+    g = min(1.0, ratio / 0.25);
+  } else {
+    g = 1.0 - max(0.0, (ratio - 0.75) / 0.25);
+  }
+  return glm::dvec3(r*255, g*255, b*255);
+}
+
 inline pair<set<int>, vector<int>> FindTrianglesIndices(const QImage& img) {
   int w = img.width(), h = img.height();
   set<int> S;

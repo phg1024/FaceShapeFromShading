@@ -331,7 +331,7 @@ int main(int argc, char **argv) {
         }
       }
       cv::resize(mean_texture_mat, mean_texture_mat, cv::Size(), 0.25, 0.25);
-      cv::Mat mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_mat, 20.0, 30.0, 0.01);
+      cv::Mat mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_mat, 20.0, 30.0, 0.1);
       cv::resize(mean_texture_refined_mat, mean_texture_refined_mat, cv::Size(), 4.0, 4.0);
 
       QImage mean_texture_image_refined(tex_size, tex_size, QImage::Format_ARGB32);
@@ -636,9 +636,22 @@ int main(int argc, char **argv) {
             for (int x = 0; x < normal_maps[i].cols; ++x) {
               float zval = zmaps[i].at<float>(y, x);
               int pidx = y * num_cols + x;
-              if (zval > -1e5 && (hair_region_indices.count(face_indices_maps[i][pidx]) == 0) && (face_boundary_indices.count(face_indices_maps[i][pidx]) == 0)) {
-                pixel_indices_i.push_back(glm::ivec2(y, x));
+              bool is_good_pixel = true;
+              is_good_pixel &= (zval > -1e5);
+              is_good_pixel &= (hair_region_indices.count(face_indices_maps[i][pidx]) == 0);
+              is_good_pixel &= (face_boundary_indices.count(face_indices_maps[i][pidx]) == 0);
+
+              auto pix = bundle.image.pixel(x, y);
+              const int SATURATED_THRESHOLD = 250;
+              if(qRed(pix) + qGreen(pix) + qBlue(pix) > SATURATED_THRESHOLD * 3) {
+                is_good_pixel = false;
               }
+              const int DARK_PIXEL_THRESHOLD = 5;
+              if(qRed(pix) + qGreen(pix) + qBlue(pix) < DARK_PIXEL_THRESHOLD * 3) {
+                is_good_pixel = false;
+              }
+
+              if(is_good_pixel) pixel_indices_i.push_back(glm::ivec2(y, x));
             }
           }
 
@@ -818,12 +831,33 @@ int main(int argc, char **argv) {
             }
           }
           image_with_lighting.save( (results_path / fs::path("lighting_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
+
+          QImage lighting_coeffs_image(512, 512, QImage::Format_ARGB32);
+          lighting_coeffs_image.fill(0);
+          for(int r=0;r<512;++r) {
+            double y = (255 - r)/255.0;
+            for(int c=0;c<512;++c) {
+              double x = (c - 255)/255.0;
+              if(x*x + y*y <= 1.0) {
+                // x = sin(theta)*sin(phi)
+                // y = sin(theta)*cos(phi)
+                // z = cos(theta)
+
+                double z = sqrt(1 - x*x - y*y);
+                VectorXd Y = sphericalharmonics(x, y, z);
+                double LdotY = l_i.transpose() * Y;
+
+                lighting_coeffs_image.setPixel(c, r, jet_color_QRgb(clamp<double>(LdotY / 1.5, 0.0, 1.0)));
+              }
+            }
+          }
+          lighting_coeffs_image.save( (results_path / fs::path("lighting_coeffs" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
         }
 
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 500.0 / iters;
+          const double lambda2 = 1000.0 / iters;
 
           // ====================================================================
           // collect valid pixels
@@ -1465,26 +1499,14 @@ int main(int argc, char **argv) {
                 double integrability_val = clamp<double>(fabs((nxnz_u - nxnz) - (nynz - nynz_l)) * 255.0, 0, 255);
                 integrability_image.setPixel(x, y, qRgb(integrability_val, integrability_val, integrability_val));
 
-                auto jet_color = [](double ratio) {
-                  double r = max(0.0, min(1.0, (ratio - 0.5) / 0.25));
-                  double g = 0;
-                  double b = 1.0 - max(0.0, min(1.0, (ratio - 0.25) / 0.25 ));
-                  if(ratio < 0.5) {
-                    g = min(1.0, ratio / 0.25);
-                  } else {
-                    g = 1.0 - max(0.0, (ratio - 0.75) / 0.25);
-                  }
-                  return qRgb(r*255, g*255, b*255);
-                };
-
                 // [0, pi], [-pi, pi]
                 double theta_val, phi_val;
                 tie(theta_val, phi_val) = normal2sphericalcoords(nx, ny, nz);
                 double theta_ratio = clamp<double>(theta_val / 3.1415926535897, 0, 1);
-                theta_image.setPixel(x, y, jet_color(theta_ratio));
+                theta_image.setPixel(x, y, jet_color_QRgb(theta_ratio));
 
                 double phi_ratio = clamp<double>((phi_val+3.1415926535897)*0.5/3.1415926535897, 0, 1);
-                phi_image.setPixel(x, y, jet_color(phi_ratio));
+                phi_image.setPixel(x, y, jet_color_QRgb(phi_ratio));
               }
             }
           }
