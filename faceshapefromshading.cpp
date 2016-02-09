@@ -442,7 +442,7 @@ int main(int argc, char **argv) {
           double dvalue = depth[(img.height()-1-y)*img.width()+x];
           if(dvalue < 1) {
             // unproject this point to obtain the actual z value
-            glm::dvec3 XYZ = glm::unProject(glm::dvec3(x, y, dvalue), Mview, Mproj, viewport);
+            glm::dvec3 XYZ = glm::unProject(glm::dvec3(x, img.height()-1-y, dvalue), Mview, Mproj, viewport);
             glm::dvec4 Rxyz = Rmat * glm::dvec4(XYZ.x, XYZ.y, XYZ.z, 1);
             point_cloud.push_back(glm::dvec3(Rxyz.x, Rxyz.y, Rxyz.z));
             depth_maps_ref[i].at<double>(y, x) = Rxyz.z;
@@ -541,8 +541,9 @@ int main(int argc, char **argv) {
       {
         boost::timer::auto_cpu_timer timer("[Shape from shading] M_LoG computation time = %w seconds.\n");
         // collect the coefficients for each pixel
-        for (int r = 0, pidx = 0; r < num_rows; ++r) {
-          for (int c = 0; c < num_cols; ++c, ++pidx) {
+        for (int r = 0; r < num_rows; ++r) {
+          for (int c = 0; c < num_cols; ++c) {
+            int pidx = r * num_cols + c;
             for (int kr = -kLoG; kr <= kLoG; ++kr) {
               int ri = r + kr;
               if (ri < 0 || ri >= num_rows) continue;
@@ -558,6 +559,7 @@ int main(int argc, char **argv) {
                 LoG_coeffs_perpixel[pidx].push_back(make_pair(qidx, LoG(kr+kLoG, kc+kLoG)));
               }
             }
+
           }
         }
         M_LoG.setFromTriplets(LoG_coeffs.begin(), LoG_coeffs.end());
@@ -572,8 +574,6 @@ int main(int argc, char **argv) {
           LoG_kernel.at<double>(kr, kc) = LoG(kr, kc);
         }
       }
-
-      cout << LoG_kernel << endl;
 
       cv::filter2D(albedos_ref[i], albedos_ref_LoG[i], -1, LoG_kernel, cv::Point(-1, -1), 0, cv::BORDER_REPLICATE);
       cv::imwrite( (results_path / fs::path("albedo_LoG" + std::to_string(i) + ".png")).string(), (albedos_ref_LoG[i] + 0.5) * 255.0);
@@ -857,7 +857,7 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 1000.0 / iters;
+          const double lambda2 = 1000.0 / pow(2, (iters - 1));
 
           // ====================================================================
           // collect valid pixels
@@ -948,22 +948,38 @@ int main(int argc, char **argv) {
 
           PhGUtils::message("Assembling matrices ...");
           vector<Tripletd> A_coeffs;
+          A_coeffs.reserve(num_constraints + num_constraints * 25);
           for(int j=0;j<num_constraints;++j) {
             A_coeffs.push_back(Tripletd(j, j, LdotY(j)));
           }
 
-          bool all_good = true;
+#if 1
           for(int j=0;j<LoG_coeffs.size();++j) {
               auto& item_j = LoG_coeffs[j];
               if(is_valid_pixel[item_j.row()] && is_valid_pixel[item_j.col()]) {
                 int new_i = pixel_index_map[item_j.row()] + num_constraints;
                 int new_j = pixel_index_map[item_j.col()];
-                all_good &= (new_i >= num_constraints && new_i < num_constraints * 2);
-                all_good &= (new_j >= 0 && new_j < num_constraints);
                 A_coeffs.push_back(Tripletd(new_i, new_j, item_j.value() * lambda2));
               }
           }
-          if(all_good) cout << "good" << endl;
+#else
+          for(int j=0;j<num_constraints;++j) {
+            int r0 = pixel_indices_i[j].x, c0 = pixel_indices_i[j].y;
+            int pidx = r0 * num_cols + c0;
+
+            for(int kr = -kLoG, r=0; kr <= kLoG; ++kr, ++r) {
+              for(int kc = -kLoG, c=0; kc <= kLoG; ++kc, ++c) {
+                int qidx = (r0 + kr) * num_cols + (c0 + kc);
+                if(qidx < 0 || qidx >= num_rows * num_cols) continue;
+                if(is_valid_pixel[qidx]) {
+                  A_coeffs.push_back(Tripletd(j + num_constraints,
+                                              pixel_index_map[qidx],
+                                              LoG(r, c) * lambda2));
+                }
+              }
+            }
+          }
+#endif
 
 #if 0
           ofstream fout("A.txt");
@@ -1436,6 +1452,7 @@ int main(int argc, char **argv) {
           QImage image_with_albedo_normal_lighting(num_cols, num_rows, QImage::Format_ARGB32);
           QImage image_error(num_cols, num_rows, QImage::Format_ARGB32);
           QImage integrability_image(num_cols, num_rows, QImage::Format_ARGB32);
+          QImage smoothness_image(num_cols, num_rows, QImage::Format_ARGB32);
           QImage theta_image(num_cols, num_rows, QImage::Format_ARGB32);
           QImage phi_image(num_cols, num_rows, QImage::Format_ARGB32);
 
@@ -1443,6 +1460,7 @@ int main(int argc, char **argv) {
           image_with_albedo_normal_lighting.fill(0);
           image_error.fill(0);
           integrability_image.fill(0);
+          smoothness_image.fill(0);
           theta_image.fill(0);
           phi_image.fill(0);
 
@@ -1457,6 +1475,8 @@ int main(int argc, char **argv) {
               else {
                 cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(y, x);
                 double nx = pix[0], ny = pix[1], nz = pix[2];
+                double theta, phi;
+                tie(theta, phi) = normal2sphericalcoords(nx, ny, nz);
 
                 VectorXd Y_ij = sphericalharmonics(nx, ny, nz);
 
@@ -1482,10 +1502,14 @@ int main(int argc, char **argv) {
                 cv::Vec3d pix_u = normal_maps[i].at<cv::Vec3d>(y-1, x);
                 double nx_u, ny_u, nz_u;
                 nx_u = pix_u[0]; ny_u = pix_u[1]; nz_u = pix_u[2];
+                double theta_u, phi_u;
+                tie(theta_u, phi_u) = normal2sphericalcoords(nx_u, ny_u, nz_u);
 
                 cv::Vec3d pix_l = normal_maps[i].at<cv::Vec3d>(y, x-1);
                 double nx_l, ny_l, nz_l;
                 nx_l = pix_l[0]; ny_l = pix_l[1]; nz_l = pix_l[2];
+                double theta_l, phi_l;
+                tie(theta_l, phi_l) = normal2sphericalcoords(nx_l, ny_l, nz_l);
 
                 auto round_off = [](double val, double eps) {
                   if(fabs(val) < eps) {
@@ -1496,8 +1520,12 @@ int main(int argc, char **argv) {
                 double nynz = ny / round_off(nz, 1e-16);
                 double nxnz_u = nx_u / round_off(nz_u, 1e-16);
                 double nynz_l = ny_l / round_off(nz_l, 1e-16);
-                double integrability_val = clamp<double>(fabs((nxnz_u - nxnz) - (nynz - nynz_l)) * 255.0, 0, 255);
-                integrability_image.setPixel(x, y, qRgb(integrability_val, integrability_val, integrability_val));
+                double integrability_val = fabs((nxnz_u - nxnz) - (nynz - nynz_l));
+                integrability_image.setPixel(x, y, jet_color_QRgb(integrability_val * 10.0));
+
+                double smoothness_val = (theta - theta_u) * (theta - theta_u) + (theta - theta_l) * (theta - theta_l)
+                                      + (phi - phi_u) * (phi - phi_u) + (phi - phi_l) * (phi - phi_l);
+                smoothness_image.setPixel(x, y, jet_color_QRgb(smoothness_val * 2.0));
 
                 // [0, pi], [-pi, pi]
                 double theta_val, phi_val;
@@ -1514,6 +1542,7 @@ int main(int argc, char **argv) {
           image_with_albedo_normal_lighting.save( (results_path / fs::path("normal_opt_lighting_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
           image_error.save( (results_path / fs::path("error_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
           integrability_image.save( (results_path / fs::path("integrability_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
+          smoothness_image.save( (results_path / fs::path("smoothness_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
           theta_image.save( (results_path / fs::path("theta_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
           phi_image.save( (results_path / fs::path("phi_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
         }
@@ -1602,7 +1631,7 @@ int main(int argc, char **argv) {
 #if USE_IMAGE_GRID
               B(j*2) = ny;
 #else
-              B(j*2) = ny * (depth_ij_u[1] - depth_ij[1]) * w_pixel;
+              B(j*2) = -ny * (depth_ij_u[1] - depth_ij[1]) * w_pixel;
 #endif
             }
           }
@@ -1741,7 +1770,22 @@ int main(int argc, char **argv) {
         // apply median filter to depth map
         //cv::medianBlur(depth_map_final, depth_map_final, 3);
 
+        glm::dmat4 Rmat = glm::eulerAngleYXZ(bundle.params.params_model.R[0],
+                                             bundle.params.params_model.R[1],
+                                             bundle.params.params_model.R[2]);
+        glm::dmat4 Rmat_inv = glm::eulerAngleZ(-bundle.params.params_model.R[2])
+                            * glm::eulerAngleX(-bundle.params.params_model.R[1])
+                            * glm::eulerAngleY(-bundle.params.params_model.R[0]);
+
+        glm::dmat4 Tmat = glm::translate(glm::dmat4(1.0),
+                                         glm::dvec3(bundle.params.params_model.T[0],
+                                                    bundle.params.params_model.T[1],
+                                                    bundle.params.params_model.T[2]));
+        glm::dmat4 Mview = Rmat;
+        glm::dmat4 Mview_inv = glm::inverse(Mview);
+
         vector<glm::dvec3> depth_final;
+        vector<glm::dvec3> depth_final_raw;
         for(int j=0;j<num_constraints;++j) {
           int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
           cv::Vec3d old_depth = depth_maps[i].at<cv::Vec3d>(r, c);
@@ -1750,7 +1794,11 @@ int main(int argc, char **argv) {
 #if USE_IMAGE_GRID
           depth_final.push_back(glm::vec3(c, r, d_j));
 #else
-          depth_final.push_back(glm::vec3(old_depth[0], old_depth[1], d_j));
+          glm::dvec3 pt = glm::vec3(old_depth[0], old_depth[1], d_j);
+          depth_final.push_back(pt);
+
+          glm::dvec4 pt0 =  Rmat_inv * glm::dvec4(pt.x, pt.y, pt.z, 1.0);
+          depth_final_raw.push_back(glm::dvec3(pt0.x, pt0.y, pt0.z));
 #endif
         }
 
@@ -1758,6 +1806,14 @@ int main(int argc, char **argv) {
         {
           ofstream fout( (results_path / fs::path("point_cloud_opt" + std::to_string(i) + ".txt")).string() );
           for(auto p : depth_final) {
+            fout << p.x << ' ' << p.y << ' ' << p.z << endl;
+          }
+          fout.close();
+        }
+
+        {
+          ofstream fout( (results_path / fs::path("point_cloud_opt_raw" + std::to_string(i) + ".txt")).string() );
+          for(auto p : depth_final_raw) {
             fout << p.x << ' ' << p.y << ' ' << p.z << endl;
           }
           fout.close();
