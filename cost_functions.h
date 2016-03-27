@@ -107,6 +107,7 @@ struct NormalMapDataTerm_analytic : public ceres::CostFunction {
   double weight;
 };
 
+
 struct NormalMapIntegrabilityTerm {
   NormalMapIntegrabilityTerm(double dx, double dy, double weight) : dx(dx), dy(dy), weight(weight) {}
 
@@ -129,28 +130,15 @@ struct NormalMapIntegrabilityTerm {
     double theta_l = parameters[2][0], phi_l = parameters[3][0];
     double theta_u = parameters[4][0], phi_u = parameters[5][0];
 
-    double nx, ny, nz;
-    tie(nx, ny, nz) = sphericalcoords2normal<double>(theta, phi);
-
-    double nx_l, ny_l, nz_l;
-    tie(nx_l, ny_l, nz_l) = sphericalcoords2normal<double>(theta_l, phi_l);
-
-    double nx_u, ny_u, nz_u;
-    tie(nx_u, ny_u, nz_u) = sphericalcoords2normal<double>(theta_u, phi_u);
+    double tan_theta = tan(theta), sin_phi = sin(phi), cos_phi = cos(phi);
+    double tan_theta_l = tan(theta_l), sin_phi_l = sin(phi_l), cos_phi_l = cos(phi_l);
+    double tan_theta_u = tan(theta_u), sin_phi_u = sin(phi_u), cos_phi_u = cos(phi_u);
 
     if(weight == 0) {
       residuals[0] = 0;
     } else {
-      nz = round_off(nz, 1e-16);
-      nz_l = round_off(nz_l, 1e-16);
-      nz_u = round_off(nz_u, 1e-16);
-
-      double nxnz = nx / nz;
-      double nxnz_u = nx_u / nz_u;
-      double nynz = ny / nz;
-      double nynz_l = ny_l / nz_l;
-
-      residuals[0] = ((nxnz_u - nxnz) - (nynz - nynz_l)) * weight;
+      residuals[0] = ((tan_theta_u * sin_phi_u - tan_theta * sin_phi) -
+                      (tan_theta * cos_phi - tan_theta_l * cos_phi_l)) * weight;
     }
 
     return true;
@@ -183,14 +171,9 @@ struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
     double theta_l = parameters[2][0], phi_l = parameters[3][0];
     double theta_u = parameters[4][0], phi_u = parameters[5][0];
 
-    double nx, ny, nz;
-    tie(nx, ny, nz) = sphericalcoords2normal<double>(theta, phi);
-
-    double nx_l, ny_l, nz_l;
-    tie(nx_l, ny_l, nz_l) = sphericalcoords2normal<double>(theta_l, phi_l);
-
-    double nx_u, ny_u, nz_u;
-    tie(nx_u, ny_u, nz_u) = sphericalcoords2normal<double>(theta_u, phi_u);
+    double tan_theta = tan(theta), sin_phi = sin(phi), cos_phi = cos(phi);
+    double tan_theta_l = tan(theta_l), sin_phi_l = sin(phi_l), cos_phi_l = cos(phi_l);
+    double tan_theta_u = tan(theta_u), sin_phi_u = sin(phi_u), cos_phi_u = cos(phi_u);
 
     if(weight == 0) {
       residuals[0] = 0;
@@ -200,60 +183,40 @@ struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
         }
       }
     } else {
-      nz = round_off(nz, 1e-16);
-      nz_l = round_off(nz_l, 1e-16);
-      nz_u = round_off(nz_u, 1e-16);
-
-      double nxnz = nx / nz;
-      double nxnz_u = nx_u / nz_u;
-      double nynz = ny / nz;
-      double nynz_l = ny_l / nz_l;
-
-      residuals[0] = ((nxnz_u - nxnz) - (nynz - nynz_l)) * weight;
+      residuals[0] = ((tan_theta_u * sin_phi_u - tan_theta * sin_phi) -
+                      (tan_theta * cos_phi - tan_theta_l * cos_phi_l)) * weight;
 
       if(jacobians != NULL) {
         for(int param_i=0;param_i<6;++param_i) assert(jacobians[param_i] != NULL);
 
         {
-          double nz2 = nz * nz + 1e-16;
-
-          Vector3d dE_dn(-nz / nz2, -nz / nz2, (nx + ny) / nz2);
-
-          Vector3d dn_dtheta = dnormal_dtheta(theta, phi);
+          double dEdtheta = -(sin_phi + cos_phi) * 2.0 / max(cos(theta*2.0) + 1.0, 1e-16);
           // jacobians[0][0] = \frac{\partial E}{\partial \theta}
-          jacobians[0][0] = dE_dn.dot(dn_dtheta) * weight;
+          jacobians[0][0] = dEdtheta * weight;
 
-          Vector3d dn_dphi = dnormal_dphi(theta, phi);
+          double dEdphi = -tan_theta * (cos_phi - sin_phi);
           // jacobians[1][0] = \frac{\partial E}{\partial \phi}
-          jacobians[1][0] = dE_dn.dot(dn_dphi) * weight;
+          jacobians[1][0] = dEdphi * weight;
         }
 
         {
-          double nz_l2 = nz_l * nz_l + 1e-16;
-
-          Vector3d dE_dn(0, nz_l / nz_l2, -ny_l / nz_l2);
-
-          Vector3d dn_dtheta = dnormal_dtheta(theta_l, phi_l);
+          double dEdtheta = cos_phi_l * 2.0 / max(cos(theta_l*2) + 1.0, 1e-16);
           // jacobians[2][0] = \frac{\partial E}{\partial \theta_l}
-          jacobians[2][0] = dE_dn.dot(dn_dtheta) * weight;
+          jacobians[2][0] = dEdtheta * weight;
 
-          Vector3d dn_dphi = dnormal_dphi(theta_l, phi_l);
+          double dEdphi = -tan_theta_l * sin_phi_l;
           // jacobians[3][0] = \frac{\partial E}{\partial \phi_l}
-          jacobians[3][0] = dE_dn.dot(dn_dphi) * weight;
+          jacobians[3][0] = dEdphi * weight;
         }
 
         {
-          double nz_u2 = nz_u * nz_u + 1e-16;
-
-          Vector3d dE_dn(nz_u / nz_u2, 0, -nx_u / nz_u2);
-
-          Vector3d dn_dtheta = dnormal_dtheta(theta_u, phi_u);
+          double dEdtheta = sin_phi_u * 2.0 / max(cos(theta_u*2.0) + 1.0, 1e-16);
           // jacobians[4][0] = \frac{\partial E}{\partial \theta_u}
-          jacobians[4][0] = dE_dn.dot(dn_dtheta)  * weight;
+          jacobians[4][0] = dEdtheta  * weight;
 
-          Vector3d dn_dphi = dnormal_dphi(theta_u, phi_u);
+          double dEdphi = cos_phi_u * tan_theta_u;
           // jacobians[5][0] = \frac{\partial E}{\partial \phi_u}
-          jacobians[5][0] = dE_dn.dot(dn_dphi) * weight;
+          jacobians[5][0] = dEdphi * weight;
         }
       }
     }

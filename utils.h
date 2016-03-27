@@ -9,40 +9,40 @@
 
 template <typename T>
 pair<T, T> normal2sphericalcoords(T nx, T ny, T nz) {
-  // nx = cos(theta)
+  // nx = sin(theta) * sin(phi)
   // ny = sin(theta) * cos(phi)
-  // nz = sin(theta) * sin(phi)
-  return make_pair(acos(nx), atan2(nz, ny));
+  // nz = cos(theta)
+  return make_pair(acos(nz), atan2(nx, ny));
 }
 
 template <typename T>
 tuple<T, T, T> sphericalcoords2normal(double theta, double phi) {
-  // nx = cos(theta)
+  // nx = sin(theta) * sin(phi)
   // ny = sin(theta) * cos(phi)
-  // nz = sin(theta) * sin(phi)
-  return make_tuple(cos(theta), sin(theta)*cos(phi), sin(theta)*sin(phi));
+  // nz = cos(theta)
+  return make_tuple(sin(theta)*sin(phi), sin(theta)*cos(phi), cos(theta));
 }
 
 inline Vector3d dnormal_dtheta(double theta, double phi) {
-  // nx = cos(theta)
+  // nx = sin(theta) * sin(phi)
   // ny = sin(theta) * cos(phi)
-  // nz = sin(theta) * sin(phi)
+  // nz = cos(theta)
 
-  // dnx_dtheta = -sin(theta)
+  // dnx_dtheta = cos(theta) * sin(phi)
   // dny_dtheta = cos(theta) * cos(phi)
-  // dnz_dtheta = cos(theta) * sin(phi)
-  return Vector3d(-sin(theta), cos(theta)*cos(phi), cos(theta)*sin(phi));
+  // dnz_dtheta = -sin(theta)
+  return Vector3d(cos(theta)*sin(phi), cos(theta)*cos(phi), -sin(theta));
 }
 
 inline Vector3d dnormal_dphi(double theta, double phi) {
-  // nx = cos(theta)
+  // nx = sin(theta) * sin(phi)
   // ny = sin(theta) * cos(phi)
-  // nz = sin(theta) * sin(phi)
+  // nz = cos(theta)
 
-  // dnx_dtheta = 0
+  // dnx_dtheta = sin(theta) * cos(phi)
   // dny_dtheta = -sin(theta) * sin(phi)
-  // dnz_dtheta = sin(theta) * cos(phi)
-  return Vector3d(0, -sin(theta)*sin(phi), sin(theta)*cos(phi));
+  // dnz_dtheta = 0
+  return Vector3d(sin(theta)*cos(phi), -sin(theta)*sin(phi), 0);
 }
 
 inline VectorXd sphericalharmonics(double nx, double ny, double nz) {

@@ -212,6 +212,7 @@ int main(int argc, char **argv) {
     auto recon_results = LoadReconstructionResult(res_filename.string());
     image_bundles.push_back(ImageBundle(image_points_pair.first, image_points_pair.second, recon_results));
   }
+  cout << "Image bundles loaded." << endl;
 
   MultilinearModel model(model_filename);
   vector<vector<glm::dvec3>> mean_texture(tex_size, vector<glm::dvec3>(tex_size, glm::dvec3(0, 0, 0)));
@@ -1530,7 +1531,7 @@ int main(int argc, char **argv) {
                 // [0, pi], [-pi, pi]
                 double theta_val, phi_val;
                 tie(theta_val, phi_val) = normal2sphericalcoords(nx, ny, nz);
-                double theta_ratio = clamp<double>(theta_val / 3.1415926535897, 0, 1);
+                double theta_ratio = clamp<double>(theta_val * 2.0 / 3.1415926535897, 0, 1);
                 theta_image.setPixel(x, y, jet_color_QRgb(theta_ratio));
 
                 double phi_ratio = clamp<double>((phi_val+3.1415926535897)*0.5/3.1415926535897, 0, 1);
