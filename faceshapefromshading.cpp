@@ -505,9 +505,6 @@ int main(int argc, char **argv) {
           unsigned char g = static_cast<unsigned char>(qGreen(pix));
           unsigned char b = static_cast<unsigned char>(qBlue(pix));
 
-          // 0~255 range
-          albedos_ref[i].at<cv::Vec3d>(y, x) = cv::Vec3d(b, g, r);
-
           // convert from BGR to RGB
           albedo_image.setPixel(x, y, qRgb(b, g, r));
         }
@@ -515,10 +512,25 @@ int main(int argc, char **argv) {
 
       albedo_image.save( (results_path / fs::path("albedo" + std::to_string(i) + ".png")).string().c_str() );
 
+      // color transfer from bundle.image to albedo_image, so the initial albedo
+      // is a better match
+      albedo_image = TransferColor(bundle.image, albedo_image);
+
+      for(int y=0;y<albedo_image.height();++y) {
+        for(int x=0;x<albedo_image.width();++x) {
+          QRgb pix = albedo_image.pixel(x, y);
+          unsigned char r = static_cast<unsigned char>(qRed(pix));
+          unsigned char g = static_cast<unsigned char>(qGreen(pix));
+          unsigned char b = static_cast<unsigned char>(qBlue(pix));
+          // 0~255 range
+          albedos_ref[i].at<cv::Vec3d>(y, x) = cv::Vec3d(r, g, b);
+        }
+      }
       // convert to [0, 1] range
       albedos_ref[i] /= 255.0;
     }
-    // make a copy, use it as initial value
+
+    // transfer the color from the input image to the reference albedo as initial albedo
     albedos = albedos_ref;
 
     for(int i=0;i<num_images;++i) {
@@ -643,11 +655,11 @@ int main(int argc, char **argv) {
               is_good_pixel &= (face_boundary_indices.count(face_indices_maps[i][pidx]) == 0);
 
               auto pix = bundle.image.pixel(x, y);
-              const int SATURATED_THRESHOLD = 250;
+              const int SATURATED_THRESHOLD = 245;
               if(qRed(pix) + qGreen(pix) + qBlue(pix) > SATURATED_THRESHOLD * 3) {
                 is_good_pixel = false;
               }
-              const int DARK_PIXEL_THRESHOLD = 5;
+              const int DARK_PIXEL_THRESHOLD = 10;
               if(qRed(pix) + qGreen(pix) + qBlue(pix) < DARK_PIXEL_THRESHOLD * 3) {
                 is_good_pixel = false;
               }
@@ -797,10 +809,20 @@ int main(int argc, char **argv) {
 
           #endif
 
+          // Lighting regularization
+          const double w_reg = 0.0001 * num_constraints;
+          MatrixXd Afinal(num_constraints*3+9, 9);
+          Afinal.topRows(num_constraints*3) = A;
+          Afinal.bottomRows(9) = MatrixXd::Identity(9, 9) * w_reg;
+          VectorXd bfinal(num_constraints*3+9);
+          bfinal.topRows(num_constraints*3) = b;
+          bfinal.bottomRows(9) = VectorXd::Zero(9);
+
           // ====================================================================
           // solve linear least squares
           // ====================================================================
           //VectorXd l_i = A.jacobiSvd(ComputeThinU | ComputeThinV).solve(b);
+          //VectorXd l_i = Afinal.colPivHouseholderQr().solve(bfinal);
           VectorXd l_i = (A.transpose() * A).ldlt().solve(A.transpose() * b);
           const double relax_factor = 1.0;
           lighting_coeffs[i] = (1.0 - relax_factor) * lighting_coeffs[i] + relax_factor * l_i;
@@ -1210,8 +1232,47 @@ int main(int argc, char **argv) {
           }
           VectorXd theta0 = theta, phi0 = phi;
 
+          if(iters == 1 && iii == 0){
+            QImage theta_image(num_cols, num_rows, QImage::Format_ARGB32);
+            QImage phi_image(num_cols, num_rows, QImage::Format_ARGB32);
+            theta_image.fill(0);
+            phi_image.fill(0);
+            for (int y = 0; y < num_rows; ++y) {
+              for (int x = 0; x < num_cols; ++x) {
+                cv::Vec3d pix_albedo = albedos[i].at<cv::Vec3d>(y, x);
+                float zval = zmaps[i].at<float>(y, x);
+                if (zval < -1e5) {
+                  continue;
+                }
+                else {
+                  cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(y, x);
+                  double nx = pix[0], ny = pix[1], nz = pix[2];
+                  double theta, phi;
+                  tie(theta, phi) = normal2sphericalcoords(nx, ny, nz);
+
+                  // [0, pi], [-pi, pi]
+                  double theta_val, phi_val;
+                  tie(theta_val, phi_val) = normal2sphericalcoords(nx, ny, nz);
+
+                  // Add a very small purturbation
+                  const double small_value = 5e-3;
+                  theta_val += rand()%2?small_value:-small_value;
+                  phi_val += rand()%2?small_value:-small_value;
+
+                  double theta_ratio = clamp<double>(theta_val * 2.0 / 3.1415926535897, 0, 1);
+                  theta_image.setPixel(x, y, jet_color_QRgb(theta_ratio));
+
+                  double phi_ratio = clamp<double>((phi_val + 3.1415926535897)*0.5/3.1415926535897, 0, 1);
+                  phi_image.setPixel(x, y, jet_color_QRgb(phi_ratio));
+                }
+              }
+            }
+            theta_image.save( (results_path / fs::path("theta_" + std::to_string(i) + "_" + std::to_string(0) + ".png")).string().c_str() );
+            phi_image.save( (results_path / fs::path("phi_" + std::to_string(i) + "_" + std::to_string(0) + ".png")).string().c_str() );
+          }
+
           const double w_data = 1.0;
-          const double w_reg = 0.1;
+          const double w_reg = 0.025;
           const double w_integrability = 1.0;
           const double w_smoothness = 0.1;
 
@@ -1328,7 +1389,9 @@ int main(int argc, char **argv) {
                                          theta.data()+pixel_index_map[up_idx], phi.data()+pixel_index_map[up_idx]);
               }
             }
+            #endif
 
+            #if 0
             // regularization term
             for(int j = 0; j < num_constraints; ++j) {
               int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
@@ -1375,7 +1438,7 @@ int main(int argc, char **argv) {
             boost::timer::auto_cpu_timer timer_solve(
               "[Shape from shading] Problem solve time = %w seconds.\n");
             ceres::Solver::Options options;
-            options.max_num_iterations = 3;
+            options.max_num_iterations = 5;
             options.num_threads = 8;
             options.num_linear_solver_threads = 8;
 
@@ -1397,9 +1460,9 @@ int main(int argc, char **argv) {
           VectorXd dtheta = theta - theta0;
           VectorXd dphi = phi - phi0;
 
+          /*
           const double dlimit_val = 3.1415926535897 * 0.25;
 
-          /*
           for(int j=0;j<num_constraints;++j) {
             int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
             int pidx = r * num_cols + c;
@@ -1534,7 +1597,7 @@ int main(int argc, char **argv) {
                 double theta_ratio = clamp<double>(theta_val * 2.0 / 3.1415926535897, 0, 1);
                 theta_image.setPixel(x, y, jet_color_QRgb(theta_ratio));
 
-                double phi_ratio = clamp<double>((phi_val+3.1415926535897)*0.5/3.1415926535897, 0, 1);
+                double phi_ratio = clamp<double>((phi_val + 3.1415926535897)*0.5/3.1415926535897, 0, 1);
                 phi_image.setPixel(x, y, jet_color_QRgb(phi_ratio));
               }
             }
@@ -1816,6 +1879,67 @@ int main(int argc, char **argv) {
           ofstream fout( (results_path / fs::path("point_cloud_opt_raw" + std::to_string(i) + ".txt")).string() );
           for(auto p : depth_final_raw) {
             fout << p.x << ' ' << p.y << ' ' << p.z << endl;
+          }
+          fout.close();
+        }
+
+        // write out the depth mesh
+        vector<int> depth_node_map(num_rows * num_cols, -1);
+        for(int j=0;j<num_constraints;++j) {
+          int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+          depth_node_map[r*num_cols+c] = j + 1;
+        }
+
+        {
+          ofstream fout((results_path / fs::path("point_cloud_opt" + std::to_string(i) + ".obj")).string());
+          for(int j=0;j<depth_final_raw.size();++j) {
+            auto& p = depth_final[j];
+            fout << "v " << p.x << ' ' << p.y << ' ' << p.z << endl;
+          }
+          for(int j=0;j<depth_final_raw.size();++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+            int idx = r * num_cols + c;
+            int lidx = idx - 1;
+            int ridx = idx + 1;
+            int uidx = idx - num_cols;
+            int didx = idx + num_cols;
+            if(ridx < num_cols * num_rows && didx < num_cols * num_rows) {
+              if(depth_node_map[ridx] > 0 && depth_node_map[didx] > 0) {
+                fout << "f " << depth_node_map[idx] << " " << depth_node_map[didx] << " " << depth_node_map[ridx] << endl;
+              }
+            }
+            if(lidx >= 0 && uidx >= 0) {
+              if(depth_node_map[lidx] > 0 && depth_node_map[uidx] > 0) {
+                fout << "f " << depth_node_map[idx] << " " << depth_node_map[uidx] << " " << depth_node_map[lidx] << endl;
+              }
+            }
+          }
+          fout.close();
+        }
+
+        {
+          ofstream fout((results_path / fs::path("point_cloud_opt_raw" + std::to_string(i) + ".obj")).string());
+          for(int j=0;j<depth_final_raw.size();++j) {
+            auto& p = depth_final_raw[j];
+            fout << "v " << p.x << ' ' << p.y << ' ' << p.z << endl;
+          }
+          for(int j=0;j<depth_final_raw.size();++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+            int idx = r * num_cols + c;
+            int lidx = idx - 1;
+            int ridx = idx + 1;
+            int uidx = idx - num_cols;
+            int didx = idx + num_cols;
+            if(ridx < num_cols * num_rows && didx < num_cols * num_rows) {
+              if(depth_node_map[ridx] > 0 && depth_node_map[didx] > 0) {
+                fout << "f " << depth_node_map[idx] << " " << depth_node_map[didx] << " " << depth_node_map[ridx] << endl;
+              }
+            }
+            if(lidx >= 0 && uidx >= 0) {
+              if(depth_node_map[lidx] > 0 && depth_node_map[uidx] > 0) {
+                fout << "f " << depth_node_map[idx] << " " << depth_node_map[uidx] << " " << depth_node_map[lidx] << endl;
+              }
+            }
           }
           fout.close();
         }

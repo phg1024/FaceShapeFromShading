@@ -137,8 +137,13 @@ struct NormalMapIntegrabilityTerm {
     if(weight == 0) {
       residuals[0] = 0;
     } else {
-      residuals[0] = ((tan_theta_u * sin_phi_u - tan_theta * sin_phi) -
-                      (tan_theta * cos_phi - tan_theta_l * cos_phi_l)) * weight;
+      if(fabs(theta) < 1e-3 && fabs(phi) < 1e-3) {
+        // singular point
+        residuals[0] = ((phi - phi_l) + (phi_u - phi) + (theta - theta_l) + (theta_u - theta)) * weight;
+      } else {
+        residuals[0] = ((tan_theta_u * sin_phi_u - tan_theta * sin_phi) -
+                        (tan_theta * cos_phi - tan_theta_l * cos_phi_l)) * weight;
+      }
     }
 
     return true;
@@ -183,40 +188,56 @@ struct NormalMapIntegrabilityTerm_analytic : public ceres::CostFunction {
         }
       }
     } else {
-      residuals[0] = ((tan_theta_u * sin_phi_u - tan_theta * sin_phi) -
-                      (tan_theta * cos_phi - tan_theta_l * cos_phi_l)) * weight;
-
-      if(jacobians != NULL) {
-        for(int param_i=0;param_i<6;++param_i) assert(jacobians[param_i] != NULL);
-
-        {
-          double dEdtheta = -(sin_phi + cos_phi) * 2.0 / max(cos(theta*2.0) + 1.0, 1e-16);
-          // jacobians[0][0] = \frac{\partial E}{\partial \theta}
-          jacobians[0][0] = dEdtheta * weight;
-
-          double dEdphi = -tan_theta * (cos_phi - sin_phi);
-          // jacobians[1][0] = \frac{\partial E}{\partial \phi}
-          jacobians[1][0] = dEdphi * weight;
+      if(fabs(theta) < 1e-3 && fabs(phi) < 1e-3) {
+        // singular point
+        residuals[0] = ((phi - phi_l) + (phi_u - phi) + (theta - theta_l) + (theta_u - theta)) * weight;
+        if(jacobians != NULL) {
+          for(int param_i=0;param_i<6;++param_i) assert(jacobians[param_i] != NULL);
+          jacobians[0][0] = 0;
+          jacobians[1][0] = 0;
+          jacobians[2][0] = -1;
+          jacobians[3][0] = -1;
+          jacobians[4][0] = 1;
+          jacobians[5][0] = 1;
         }
+      } else {
+        residuals[0] = ((tan_theta_u * sin_phi_u - tan_theta * sin_phi) -
+                        (tan_theta * cos_phi - tan_theta_l * cos_phi_l)) * weight;
 
-        {
-          double dEdtheta = cos_phi_l * 2.0 / max(cos(theta_l*2) + 1.0, 1e-16);
-          // jacobians[2][0] = \frac{\partial E}{\partial \theta_l}
-          jacobians[2][0] = dEdtheta * weight;
+                        residuals[0] = ((tan_theta_u * sin_phi_u - tan_theta * sin_phi) -
+                                        (tan_theta * cos_phi - tan_theta_l * cos_phi_l)) * weight;
+        if(jacobians != NULL) {
+          for(int param_i=0;param_i<6;++param_i) assert(jacobians[param_i] != NULL);
 
-          double dEdphi = -tan_theta_l * sin_phi_l;
-          // jacobians[3][0] = \frac{\partial E}{\partial \phi_l}
-          jacobians[3][0] = dEdphi * weight;
-        }
+          {
+            double dEdtheta = -(sin_phi + cos_phi) * 2.0 / max(cos(theta*2.0) + 1.0, 1e-16);
+            // jacobians[0][0] = \frac{\partial E}{\partial \theta}
+            jacobians[0][0] = dEdtheta * weight;
 
-        {
-          double dEdtheta = sin_phi_u * 2.0 / max(cos(theta_u*2.0) + 1.0, 1e-16);
-          // jacobians[4][0] = \frac{\partial E}{\partial \theta_u}
-          jacobians[4][0] = dEdtheta  * weight;
+            double dEdphi = -tan_theta * (cos_phi - sin_phi);
+            // jacobians[1][0] = \frac{\partial E}{\partial \phi}
+            jacobians[1][0] = dEdphi * weight;
+          }
 
-          double dEdphi = cos_phi_u * tan_theta_u;
-          // jacobians[5][0] = \frac{\partial E}{\partial \phi_u}
-          jacobians[5][0] = dEdphi * weight;
+          {
+            double dEdtheta = cos_phi_l * 2.0 / max(cos(theta_l*2) + 1.0, 1e-16);
+            // jacobians[2][0] = \frac{\partial E}{\partial \theta_l}
+            jacobians[2][0] = dEdtheta * weight;
+
+            double dEdphi = -tan_theta_l * sin_phi_l;
+            // jacobians[3][0] = \frac{\partial E}{\partial \phi_l}
+            jacobians[3][0] = dEdphi * weight;
+          }
+
+          {
+            double dEdtheta = sin_phi_u * 2.0 / max(cos(theta_u*2.0) + 1.0, 1e-16);
+            // jacobians[4][0] = \frac{\partial E}{\partial \theta_u}
+            jacobians[4][0] = dEdtheta  * weight;
+
+            double dEdphi = cos_phi_u * tan_theta_u;
+            // jacobians[5][0] = \frac{\partial E}{\partial \phi_u}
+            jacobians[5][0] = dEdphi * weight;
+          }
         }
       }
     }

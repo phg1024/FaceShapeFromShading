@@ -200,4 +200,13 @@ inline MatrixXd ComputeLoGKernel(int k, double sigma) {
   return kernel;
 }
 
+QImage TransferColor(const QImage& source, const QImage& target) {
+  // Make a copy
+  QImage result = target;
+
+  // Compute stats of both images
+
+  // Do the transfer
+}
+
 #endif //FACESHAPEFROMSHADING_UTILS_H
