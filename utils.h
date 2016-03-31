@@ -200,13 +200,118 @@ inline MatrixXd ComputeLoGKernel(int k, double sigma) {
   return kernel;
 }
 
-QImage TransferColor(const QImage& source, const QImage& target) {
+static QImage TransferColor(const QImage& source, const QImage& target,
+                            const vector<int>& valid_pixels_s,
+                            const vector<int>& valid_pixels_t) {
   // Make a copy
-  QImage result = target;
+  QImage result = source;
+
+  const int num_rows_s = source.height(), num_cols_s = source.width();
+  const int num_rows_t = target.height(), num_cols_t = target.width();
+  const size_t num_pixels_s = valid_pixels_s.size();
+  const size_t num_pixels_t = valid_pixels_t.size();
+
+  Matrix3d RGB2LMS, LMS2RGB;
+  RGB2LMS << 0.3811, 0.5783, 0.0402,
+             0.1967, 0.7244, 0.0782,
+             0.0241, 0.1288, 0.8444;
+  LMS2RGB << 4.4679, -3.5873, 0.1193,
+            -1.2186, 2.3809, -0.1624,
+             0.0497, -0.2439, 1.2045;
+
+  Matrix3d b, c, b2, c2;
+  b << 1.0/sqrt(3.0), 0, 0,
+       0, 1.0/sqrt(6.0), 0,
+       0, 0, 1.0/sqrt(2.0);
+  c << 1, 1, 1,
+       1, 1, -2,
+       1, -1, 0;
+  b2 << sqrt(3.0)/3.0, 0, 0,
+        0, sqrt(6.0)/6.0, 0,
+        0, 0, sqrt(2.0)/2.0;
+  c2 << 1, 1, 1,
+        1, 1, -1,
+        1, -2, 0;
+  Matrix3d LMS2lab = b * c;
+  Matrix3d lab2LMS = c2 * b2;
+
+  auto unpack_pixel = [](QRgb pix) {
+    int r = max(1, qRed(pix)), g = max(1, qGreen(pix)), b = max(1, qBlue(pix));
+    return make_tuple(r, g, b);
+  };
+
+  auto compute_image_stats = [&](const QImage& img, const vector<int>& valid_pixels) {
+    const size_t num_pixels = valid_pixels.size();
+    const int num_cols = img.width(), num_rows  = img.height();
+    MatrixXd pixels(3, num_pixels);
+
+    cout << num_cols << 'x' << num_rows << endl;
+
+    for(size_t i=0;i<num_pixels;++i) {
+      int y = valid_pixels[i] / num_cols;
+      int x = valid_pixels[i] % num_cols;
+
+      int r, g, b;
+      tie(r, g, b) = unpack_pixel(img.pixel(x, y));
+      pixels.col(i) = Vector3d(r / 255.0, g / 255.0, b / 255.0);
+    }
+
+    MatrixXd pixels_LMS = RGB2LMS * pixels;
+
+    for(int i=0;i<3;i++) {
+      for(int j=0;j<num_pixels;++j) {
+        pixels_LMS(i, j) = log10(pixels_LMS(i, j));
+      }
+    }
+
+    MatrixXd pixels_lab = LMS2lab * pixels_LMS;
+
+    Vector3d mean = pixels_lab.rowwise().mean();
+    Vector3d stdev(0, 0, 0);
+    for(int i=0;i<num_pixels;++i) {
+      Vector3d diff = pixels_lab.col(i) - mean;
+      stdev += Vector3d(diff[0]*diff[0], diff[1]*diff[1], diff[2]*diff[2]);
+    }
+    stdev /= (num_pixels - 1);
+
+    for(int i=0;i<3;++i) stdev[i] = sqrt(stdev[i]);
+
+    cout << "mean: " << mean << endl;
+    cout << "std: " << stdev << endl;
+
+    return make_tuple(pixels_lab, mean, stdev);
+  };
 
   // Compute stats of both images
+  MatrixXd lab_s, lab_t;
+  Vector3d mean_s, std_s, mean_t, std_t;
+  tie(lab_s, mean_s, std_s) = compute_image_stats(source, valid_pixels_s);
+  tie(lab_t, mean_t, std_t) = compute_image_stats(target, valid_pixels_t);
 
   // Do the transfer
+  MatrixXd res(3, num_pixels_s);
+  for(int i=0;i<3;++i) {
+    for(int j=0;j<num_pixels_s;++j) {
+      res(i, j) = (lab_s(i, j) - mean_s[i]) * std_t[i] / std_s[i] + mean_t[i];
+    }
+  }
+
+  MatrixXd LMS_res = lab2LMS * res;
+  for(int i=0;i<3;++i) {
+    for(int j=0;j<num_pixels_s;++j) {
+      LMS_res(i, j) = pow(10, LMS_res(i, j));
+    }
+  }
+
+  MatrixXd est_im = LMS2RGB * LMS_res;
+  for(size_t i=0;i<num_pixels_s;++i) {
+    int y = valid_pixels_s[i] / num_cols_s;
+    int x = valid_pixels_s[i] % num_cols_s;
+    result.setPixel(x, y, qRgb(clamp<double>(est_im(0, i) * 255.0, 0, 255),
+                               clamp<double>(est_im(1, i) * 255.0, 0, 255),
+                               clamp<double>(est_im(2, i) * 255.0, 0, 255)));
+  }
+  return result;
 }
 
 #endif //FACESHAPEFROMSHADING_UTILS_H

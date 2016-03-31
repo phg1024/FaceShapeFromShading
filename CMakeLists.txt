@@ -89,6 +89,12 @@ target_link_libraries(FaceShapeFromShading
                       Qt5::OpenGL
                       ${MKLLIBS}
                       ${PhGLib})
+
+add_executable(ptrender ptrender.cpp)
+
+add_executable(explicit explicit.cpp)
+target_link_libraries(explicit CGAL basicmesh)
+
 link_directories(MultilinearReconstruction)
 
 add_subdirectory(MultilinearReconstruction)

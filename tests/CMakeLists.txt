@@ -74,3 +74,12 @@ target_link_libraries(test_fbo
         Qt5::Core
         Qt5::Widgets
         Qt5::OpenGL)
+
+add_executable(test_transfer_color test_transfer_color.cpp)
+target_link_libraries(test_transfer_color
+        Qt5::Core
+        Qt5::Widgets
+        Qt5::OpenGL
+        ${MKLLIBS}
+        ${PhGLib})
+include_directories(..)

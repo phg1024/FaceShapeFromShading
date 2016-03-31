@@ -11,8 +11,6 @@
 #include <QFile>
 
 #include <GL/freeglut_std.h>
-#include "glm/glm.hpp"
-#include "gli/gli.hpp"
 
 #include <opencv2/opencv.hpp>
 
@@ -367,6 +365,7 @@ int main(int argc, char **argv) {
     vector<cv::Mat> depth_maps_ref_LoG(num_images);
     vector<cv::Mat> depth_maps(num_images);
     vector<cv::Mat> zmaps(num_images);
+    vector<vector<int>> valie_pixels_map(num_images);
     vector<cv::Mat> albedos_ref(num_images);
     vector<cv::Mat> albedos_ref_LoG(num_images);
     vector<cv::Mat> albedos(num_images);
@@ -450,6 +449,7 @@ int main(int argc, char **argv) {
             depth_maps[i].at<cv::Vec3d>(y, x) = cv::Vec3d(Rxyz.x, Rxyz.y, Rxyz.z);
             zmaps[i].at<float>(y, x) = Rxyz.z;
             depth_img.setPixel(x, y, qRgb(dvalue*255, 0, (1-dvalue)*255));
+            valie_pixels_map[i].push_back(y * img.width() + x);
           } else {
             depth_img.setPixel(x, y, qRgb(255, 255, 255));
             depth_maps_ref[i].at<double>(y, x) = -1e6;
@@ -514,7 +514,9 @@ int main(int argc, char **argv) {
 
       // color transfer from bundle.image to albedo_image, so the initial albedo
       // is a better match
-      albedo_image = TransferColor(bundle.image, albedo_image);
+      albedo_image = TransferColor(albedo_image, bundle.image, valie_pixels_map[i], valie_pixels_map[i]);
+
+      albedo_image.save( (results_path / fs::path("albedo_transferred_" + std::to_string(i) + ".png")).string().c_str() );
 
       for(int y=0;y<albedo_image.height();++y) {
         for(int x=0;x<albedo_image.width();++x) {
@@ -1004,17 +1006,17 @@ int main(int argc, char **argv) {
           }
 #endif
 
-#if 0
+#if 1
           ofstream fout("A.txt");
           for(auto ttt : A_coeffs) {
-            fout << ttt.row() << ' ' << ttt.col() << ' ' << ttt.value() << endl;
+            fout << ttt.row() << ' ' << ttt.col() << ' ' << ttt.value() << '\n';
           }
           fout.close();
 #endif
 
           Eigen::SparseMatrix<double> A(num_constraints * 2, num_constraints);
           A.setFromTriplets(A_coeffs.begin(), A_coeffs.end());
-          A.makeCompressed();
+          //A.makeCompressed();
 
           PhGUtils::message("A assembled ...");
 
@@ -1031,23 +1033,24 @@ int main(int argc, char **argv) {
           // ====================================================================
           // solve linear least squares
           // ====================================================================
-          const double epsilon = 0.0;
-          Eigen::SparseMatrix<double> eye(num_constraints, num_constraints);
-          for(int j=0;j<num_constraints;++j) eye.insert(j, j) = epsilon;
+          //const double epsilon = 0.0;
+          //Eigen::SparseMatrix<double> eye(num_constraints, num_constraints);
+          //for(int j=0;j<num_constraints;++j) eye.insert(j, j) = epsilon;
 
-          Eigen::SparseMatrix<double> AtA = (A.transpose() * A).pruned().eval();
-          AtA.makeCompressed();
+          cout << "Computing AtA ..." << endl;
+          Eigen::SparseMatrix<double> AtA = A.transpose() * A;
+          //AtA.makeCompressed();
 
           cout << AtA.rows() << 'x' << AtA.cols() << endl;
           cout << AtA.nonZeros() << endl;
 
-          AtA += eye;
+          //AtA += eye;
 
           // AtA is symmetric, so it is okay to use it as column major?
           CholmodSupernodalLLT<Eigen::SparseMatrix<double>> solver;
           solver.compute(AtA);
           if(solver.info()!=Success) {
-            cerr << "Failed to decompose matrix A." << endl;
+            cout << "Failed to decompose matrix A." << endl;
             exit(-1);
           }
 
@@ -1057,7 +1060,7 @@ int main(int argc, char **argv) {
             VectorXd x = solver.solve(Atb);
 
             if(solver.info()!=Success) {
-              cerr << "Failed to solve A\\b." << endl;
+              cout << "Failed to solve A\\b." << endl;
               exit(-1);
             }
 
@@ -1438,7 +1441,7 @@ int main(int argc, char **argv) {
             boost::timer::auto_cpu_timer timer_solve(
               "[Shape from shading] Problem solve time = %w seconds.\n");
             ceres::Solver::Options options;
-            options.max_num_iterations = 5;
+            options.max_num_iterations = 3;
             options.num_threads = 8;
             options.num_linear_solver_threads = 8;
 
@@ -1456,11 +1459,10 @@ int main(int argc, char **argv) {
             cout << summary.BriefReport() << endl;
           }
 
-#if 1
+#if 0
           VectorXd dtheta = theta - theta0;
           VectorXd dphi = phi - phi0;
 
-          /*
           const double dlimit_val = 3.1415926535897 * 0.25;
 
           for(int j=0;j<num_constraints;++j) {
@@ -1473,7 +1475,6 @@ int main(int argc, char **argv) {
           VectorXd dlimit = VectorXd::Ones(num_constraints) * dlimit_val;
           dtheta = dtheta.cwiseMax(-dlimit); dtheta = dtheta.cwiseMin(dlimit);
           dphi = dphi.cwiseMax(-dlimit); dphi = dphi.cwiseMin(dlimit);
-          */
 
           const double angle_update_relax_factor = 0.5;
           theta = theta0 + dtheta * angle_update_relax_factor;
@@ -1488,7 +1489,7 @@ int main(int argc, char **argv) {
 
             double nx, ny, nz;
             tie(nx, ny, nz) = sphericalcoords2normal<double>(theta(j), phi(j));
-            nz = max(0.0, nz);
+            //nz = max(0.0, nz);
 
             normal_map_blurred.at<cv::Vec3f>(r, c) = cv::Vec3f(nx, ny, nz);
           }
@@ -1781,7 +1782,7 @@ int main(int argc, char **argv) {
 
         Eigen::SparseMatrix<double> A(num_constraints * 4, num_constraints);
         A.setFromTriplets(A_coeffs.begin(), A_coeffs.end());
-        A.makeCompressed();
+        //A.makeCompressed();
 
         PhGUtils::message("done.");
 
@@ -1790,7 +1791,7 @@ int main(int argc, char **argv) {
         for(int j=0;j<num_constraints;++j) eye.insert(j, j) = 1e-16;
 
         Eigen::SparseMatrix<double> AtA = (A.transpose() * A).pruned().eval();
-        AtA.makeCompressed();
+        //AtA.makeCompressed();
 
         cout << AtA.rows() << 'x' << AtA.cols() << endl;
         cout << AtA.nonZeros() << endl;
@@ -1894,7 +1895,7 @@ int main(int argc, char **argv) {
           ofstream fout((results_path / fs::path("point_cloud_opt" + std::to_string(i) + ".obj")).string());
           for(int j=0;j<depth_final_raw.size();++j) {
             auto& p = depth_final[j];
-            fout << "v " << p.x << ' ' << p.y << ' ' << p.z << endl;
+            fout << "v " << p.x << ' ' << p.y << ' ' << p.z << '\n';
           }
           for(int j=0;j<depth_final_raw.size();++j) {
             int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
@@ -1905,12 +1906,12 @@ int main(int argc, char **argv) {
             int didx = idx + num_cols;
             if(ridx < num_cols * num_rows && didx < num_cols * num_rows) {
               if(depth_node_map[ridx] > 0 && depth_node_map[didx] > 0) {
-                fout << "f " << depth_node_map[idx] << " " << depth_node_map[didx] << " " << depth_node_map[ridx] << endl;
+                fout << "f " << depth_node_map[idx] << " " << depth_node_map[didx] << " " << depth_node_map[ridx] << '\n';
               }
             }
             if(lidx >= 0 && uidx >= 0) {
               if(depth_node_map[lidx] > 0 && depth_node_map[uidx] > 0) {
-                fout << "f " << depth_node_map[idx] << " " << depth_node_map[uidx] << " " << depth_node_map[lidx] << endl;
+                fout << "f " << depth_node_map[idx] << " " << depth_node_map[uidx] << " " << depth_node_map[lidx] << '\n';
               }
             }
           }
@@ -1921,7 +1922,7 @@ int main(int argc, char **argv) {
           ofstream fout((results_path / fs::path("point_cloud_opt_raw" + std::to_string(i) + ".obj")).string());
           for(int j=0;j<depth_final_raw.size();++j) {
             auto& p = depth_final_raw[j];
-            fout << "v " << p.x << ' ' << p.y << ' ' << p.z << endl;
+            fout << "v " << p.x << ' ' << p.y << ' ' << p.z << '\n';
           }
           for(int j=0;j<depth_final_raw.size();++j) {
             int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
@@ -1932,12 +1933,12 @@ int main(int argc, char **argv) {
             int didx = idx + num_cols;
             if(ridx < num_cols * num_rows && didx < num_cols * num_rows) {
               if(depth_node_map[ridx] > 0 && depth_node_map[didx] > 0) {
-                fout << "f " << depth_node_map[idx] << " " << depth_node_map[didx] << " " << depth_node_map[ridx] << endl;
+                fout << "f " << depth_node_map[idx] << " " << depth_node_map[didx] << " " << depth_node_map[ridx] << '\n';
               }
             }
             if(lidx >= 0 && uidx >= 0) {
               if(depth_node_map[lidx] > 0 && depth_node_map[uidx] > 0) {
-                fout << "f " << depth_node_map[idx] << " " << depth_node_map[uidx] << " " << depth_node_map[lidx] << endl;
+                fout << "f " << depth_node_map[idx] << " " << depth_node_map[uidx] << " " << depth_node_map[lidx] << '\n';
               }
             }
           }

@@ -27,4 +27,7 @@ using namespace std;
 #include <Eigen/CholmodSupport>
 using namespace Eigen;
 
+#include "glm/glm.hpp"
+#include "gli/gli.hpp"
+
 #endif //FACESHAPEFROMSHADING_COMMON_H_H
