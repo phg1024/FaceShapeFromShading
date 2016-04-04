@@ -84,6 +84,7 @@ target_link_libraries(FaceShapeFromShading
                       multilinearmodel
                       basicmesh
                       tensor
+                      ioutilities
                       Qt5::Core
                       Qt5::Widgets
                       Qt5::OpenGL
@@ -93,7 +94,7 @@ target_link_libraries(FaceShapeFromShading
 add_executable(ptrender ptrender.cpp)
 
 add_executable(explicit explicit.cpp)
-target_link_libraries(explicit CGAL basicmesh)
+target_link_libraries(explicit CGAL basicmesh ioutilities ${PhGLib})
 
 link_directories(MultilinearReconstruction)
 

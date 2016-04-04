@@ -198,7 +198,9 @@ int main(int argc, char **argv) {
   fs::path results_path = image_files_path / fs::path("SFS");
   fs::create_directories(results_path);
 
+  cout << "Reading settings file " << settings_filename << endl;
   vector<pair<string, string>> image_points_filenames = ParseSettingsFile(settings_filename);
+  cout << image_points_filenames.size() << " input images." << endl;
   vector<ImageBundle> image_bundles;
   for(auto& p : image_points_filenames) {
     fs::path image_filename = settings_filepath.parent_path() / fs::path(p.first);
@@ -235,6 +237,8 @@ int main(int argc, char **argv) {
       visualizer.BindMesh(mesh);
       visualizer.SetCameraParameters(bundle.params.params_cam);
       visualizer.SetMeshRotationTranslation(bundle.params.params_model.R, bundle.params.params_model.T);
+      visualizer.SetIndexEncoded(true);
+      visualizer.SetEnableLighting(false);
       QImage img = visualizer.Render();
       img.save("mesh.png");
 
@@ -329,9 +333,14 @@ int main(int argc, char **argv) {
           }
         }
       }
+
+      #if 1
       cv::resize(mean_texture_mat, mean_texture_mat, cv::Size(), 0.25, 0.25);
       cv::Mat mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_mat, 20.0, 30.0, 0.1);
       cv::resize(mean_texture_refined_mat, mean_texture_refined_mat, cv::Size(), 4.0, 4.0);
+      #else
+      cv::Mat mean_texture_refined_mat = mean_texture_mat;
+      #endif
 
       QImage mean_texture_image_refined(tex_size, tex_size, QImage::Format_ARGB32);
       for(int i=0;i<tex_size;++i) {
