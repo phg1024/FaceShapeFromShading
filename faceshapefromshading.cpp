@@ -51,58 +51,10 @@ struct ImageBundle {
   ReconstructionResult params;
 };
 
-int main(int argc, char **argv) {
-  QApplication a(argc, argv);
-  glutInit(&argc, argv);
-
-  //google::InitGoogleLogging(argv[0]);
-
-  const string model_filename("/home/phg/Data/Multilinear/blendshape_core.tensor");
-  const string id_prior_filename("/home/phg/Data/Multilinear/blendshape_u_0_aug.tensor");
-  const string exp_prior_filename("/home/phg/Data/Multilinear/blendshape_u_1_aug.tensor");
-  const string template_mesh_filename("/home/phg/Data/Multilinear/template.obj");
-  const string contour_points_filename("/home/phg/Data/Multilinear/contourpoints.txt");
-  const string landmarks_filename("/home/phg/Data/Multilinear/landmarks_73.txt");
-  const string albedo_index_map_filename("/home/phg/Data/Multilinear/albedo_index.png");
-  const string albedo_pixel_map_filename("/home/phg/Data/Multilinear/albedo_pixel.png");
-  const string mean_albedo_filename("/home/phg/Data/Texture/mean_texture.png");
-
-  const string valid_faces_indices_filename("/home/phg/Data/Multilinear/face_region_indices.txt");
-  const string face_boundary_indices_filename("/home/phg/Data/Multilinear/face_boundary_indices.txt");
-  const string hair_region_filename("/home/phg/Data/Multilinear/hair_region_indices.txt");
-
-  BasicMesh mesh(template_mesh_filename);
-  auto landmarks = LoadIndices(landmarks_filename);
-  auto contour_indices = LoadContourIndices(contour_points_filename);
-
-  auto valid_faces_indices_quad = LoadIndices(valid_faces_indices_filename);
-  // @HACK each quad face is triangulated, so the indices change from i to [2*i, 2*i+1]
-  vector<int> valid_faces_indices;
-  for(auto fidx : valid_faces_indices_quad) {
-    valid_faces_indices.push_back(fidx*2);
-    valid_faces_indices.push_back(fidx*2+1);
-  }
-
-  auto faces_boundary_indices_quad = LoadIndices(face_boundary_indices_filename);
-  // @HACK each quad face is triangulated, so the indices change from i to [2*i, 2*i+1]
-  unordered_set<int> face_boundary_indices;
-  for(auto fidx : faces_boundary_indices_quad) {
-    face_boundary_indices.insert(fidx*2);
-    face_boundary_indices.insert(fidx*2+1);
-  }
-
-  auto hair_region_indices_quad = LoadIndices(hair_region_filename);
-  // @HACK each quad face is triangulated, so the indices change from i to [2*i, 2*i+1]
-  unordered_set<int> hair_region_indices;
-  for(auto fidx : hair_region_indices_quad) {
-    hair_region_indices.insert(fidx*2);
-    hair_region_indices.insert(fidx*2+1);
-  }
-
+QImage GetIndexMap(const string& albedo_index_map_filename,
+                   const BasicMesh& mesh,
+                   bool generate_index_map = true) {
   const int tex_size = 2048;
-
-  // Generate index map for albedo
-  bool generate_index_map = true;
   QImage albedo_index_map;
   if(QFile::exists(albedo_index_map_filename.c_str()) && (!generate_index_map)) {
     PhGUtils::message("loading index map for albedo.");
@@ -117,12 +69,20 @@ int main(int argc, char **argv) {
     img.save("albedo_index.png");
     albedo_index_map = img;
   }
+  return albedo_index_map;
+}
 
-  // Compute the barycentric coordinates for each pixel
+pair<QImage, vector<vector<PixelInfo>>> GetPixelCoordinatesMap(
+  const string& albedo_pixel_map_filename,
+  const QImage& albedo_index_map,
+  const BasicMesh& mesh,
+  bool gen_pixel_map = false) {
+
+  const int tex_size = 2048;
+
   vector<vector<PixelInfo>> albedo_pixel_map(tex_size, vector<PixelInfo>(tex_size));
 
   // Generate pixel map for albedo
-  bool gen_pixel_map = false;
   QImage pixel_map_image;
   if(QFile::exists(albedo_pixel_map_filename.c_str()) && (!gen_pixel_map)) {
     pixel_map_image = QImage(albedo_pixel_map_filename.c_str());
@@ -189,18 +149,84 @@ int main(int argc, char **argv) {
     PhGUtils::message("done.");
   }
 
+  return make_pair(pixel_map_image, albedo_pixel_map);
+}
+
+int main(int argc, char **argv) {
+  QApplication a(argc, argv);
+  glutInit(&argc, argv);
+
+  //google::InitGoogleLogging(argv[0]);
+
+  const string model_filename("/home/phg/Data/Multilinear/blendshape_core.tensor");
+  const string id_prior_filename("/home/phg/Data/Multilinear/blendshape_u_0_aug.tensor");
+  const string exp_prior_filename("/home/phg/Data/Multilinear/blendshape_u_1_aug.tensor");
+  const string template_mesh_filename("/home/phg/Data/Multilinear/template.obj");
+  const string contour_points_filename("/home/phg/Data/Multilinear/contourpoints.txt");
+  const string landmarks_filename("/home/phg/Data/Multilinear/landmarks_73.txt");
+  const string albedo_index_map_filename("/home/phg/Data/Multilinear/albedo_index.png");
+  const string albedo_pixel_map_filename("/home/phg/Data/Multilinear/albedo_pixel.png");
+  const string mean_albedo_filename("/home/phg/Data/Texture/mean_texture.png");
+
+  const string valid_faces_indices_filename("/home/phg/Data/Multilinear/face_region_indices.txt");
+  const string face_boundary_indices_filename("/home/phg/Data/Multilinear/face_boundary_indices.txt");
+  const string hair_region_filename("/home/phg/Data/Multilinear/hair_region_indices.txt");
+
+  BasicMesh mesh(template_mesh_filename);
+  auto landmarks = LoadIndices(landmarks_filename);
+  auto contour_indices = LoadContourIndices(contour_points_filename);
+
+  auto valid_faces_indices_quad = LoadIndices(valid_faces_indices_filename);
+  // @HACK each quad face is triangulated, so the indices change from i to [2*i, 2*i+1]
+  vector<int> valid_faces_indices;
+  for(auto fidx : valid_faces_indices_quad) {
+    valid_faces_indices.push_back(fidx*2);
+    valid_faces_indices.push_back(fidx*2+1);
+  }
+
+  auto faces_boundary_indices_quad = LoadIndices(face_boundary_indices_filename);
+  // @HACK each quad face is triangulated, so the indices change from i to [2*i, 2*i+1]
+  unordered_set<int> face_boundary_indices;
+  for(auto fidx : faces_boundary_indices_quad) {
+    face_boundary_indices.insert(fidx*2);
+    face_boundary_indices.insert(fidx*2+1);
+  }
+
+  auto hair_region_indices_quad = LoadIndices(hair_region_filename);
+  // @HACK each quad face is triangulated, so the indices change from i to [2*i, 2*i+1]
+  unordered_set<int> hair_region_indices;
+  for(auto fidx : hair_region_indices_quad) {
+    hair_region_indices.insert(fidx*2);
+    hair_region_indices.insert(fidx*2+1);
+  }
+
+  const int tex_size = 2048;
+
+  // Generate index map for albedo
+  QImage albedo_index_map = GetIndexMap(albedo_index_map_filename, mesh);
+
+  // Compute the barycentric coordinates for each pixel
+  vector<vector<PixelInfo>> albedo_pixel_map;
+  QImage pixel_map_image;
+  tie(pixel_map_image, albedo_pixel_map) = GetPixelCoordinatesMap(albedo_pixel_map_filename,
+                                                                  albedo_index_map, mesh);
+
   const string settings_filename(argv[1]);
 
   // Parse the setting file and load image related resources
   fs::path settings_filepath(settings_filename);
 
+  // Create SFS results directory
   fs::path image_files_path = settings_filepath.parent_path();
   fs::path results_path = image_files_path / fs::path("SFS");
   fs::create_directories(results_path);
 
+  // Load the settings file
   cout << "Reading settings file " << settings_filename << endl;
   vector<pair<string, string>> image_points_filenames = ParseSettingsFile(settings_filename);
   cout << image_points_filenames.size() << " input images." << endl;
+
+  // Load the image bundles: image, points and its reconstruction result
   vector<ImageBundle> image_bundles;
   for(auto& p : image_points_filenames) {
     fs::path image_filename = settings_filepath.parent_path() / fs::path(p.first);
@@ -215,6 +241,7 @@ int main(int argc, char **argv) {
   cout << "Image bundles loaded." << endl;
 
   MultilinearModel model(model_filename);
+
   vector<vector<glm::dvec3>> mean_texture(tex_size, vector<glm::dvec3>(tex_size, glm::dvec3(0, 0, 0)));
   cv::Mat mean_texture_mat(tex_size, tex_size, CV_64FC3);
   vector<vector<double>> mean_texture_weight(tex_size, vector<double>(tex_size, 0));
