@@ -200,6 +200,24 @@ inline MatrixXd ComputeLoGKernel(int k, double sigma) {
   return kernel;
 }
 
+inline Vector3d rgb2lab(double r, double g, double b) {
+  Vector3d rgb(r, g, b);
+  Matrix3d RGB2LMS;
+  RGB2LMS << 0.3811, 0.5783, 0.0402,
+             0.1967, 0.7244, 0.0782,
+             0.0241, 0.1288, 0.8444;
+  Matrix3d mb, mc;
+  mb << 1.0/sqrt(3.0), 0, 0,
+       0, 1.0/sqrt(6.0), 0,
+       0, 0, 1.0/sqrt(2.0);
+  mc << 1, 1, 1,
+       1, 1, -2,
+       1, -1, 0;
+  Matrix3d LMS2lab = mb * mc;
+  Vector3d Lab = LMS2lab * RGB2LMS * rgb;
+  return Lab;
+}
+
 static QImage TransferColor(const QImage& source, const QImage& target,
                             const vector<int>& valid_pixels_s,
                             const vector<int>& valid_pixels_t) {

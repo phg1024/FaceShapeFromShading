@@ -336,7 +336,13 @@ int main(int argc, char **argv) {
 
       #if 1
       cv::resize(mean_texture_mat, mean_texture_mat, cv::Size(), 0.25, 0.25);
-      cv::Mat mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_mat, 20.0, 30.0, 0.1);
+      cv::Mat mean_texture_refined_mat = mean_texture_mat;
+      mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_refined_mat, 5.0, 30.0, 0.5);
+      mean_texture_refined_mat = 0.25 * mean_texture_mat + 0.75 * mean_texture_refined_mat;
+      mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_refined_mat, 10.0, 30.0, 0.5);
+      mean_texture_refined_mat = 0.25 * mean_texture_mat + 0.75 * mean_texture_refined_mat;
+      mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_refined_mat, 20.0, 30.0, 0.5);
+      mean_texture_refined_mat = 0.25 * mean_texture_mat + 0.75 * mean_texture_refined_mat;
       cv::resize(mean_texture_refined_mat, mean_texture_refined_mat, cv::Size(), 4.0, 4.0);
       #else
       cv::Mat mean_texture_refined_mat = mean_texture_mat;
@@ -433,6 +439,7 @@ int main(int argc, char **argv) {
       zmaps[i] = cv::Mat(img.height(), img.width(), CV_32F);
       QImage depth_img = img;
       vector<glm::dvec3> point_cloud;
+      //#pragma omp parallel for
       for(int y=0;y<img.height();++y) {
         for(int x=0;x<img.width();++x) {
           auto pix = img.pixel(x, y);
@@ -506,6 +513,7 @@ int main(int argc, char **argv) {
       QImage albedo_image = visualizer.Render(true);
 
       albedos_ref[i] = cv::Mat(bundle.image.height(), bundle.image.width(), CV_64FC3);
+      #pragma omp parallel for
       for(int y=0;y<albedo_image.height();++y) {
         for(int x=0;x<albedo_image.width();++x) {
 
@@ -527,6 +535,7 @@ int main(int argc, char **argv) {
 
       albedo_image.save( (results_path / fs::path("albedo_transferred_" + std::to_string(i) + ".png")).string().c_str() );
 
+      #pragma omp parallel for
       for(int y=0;y<albedo_image.height();++y) {
         for(int x=0;x<albedo_image.width();++x) {
           QRgb pix = albedo_image.pixel(x, y);
@@ -645,10 +654,12 @@ int main(int argc, char **argv) {
 
       vector<bool> is_boundary(num_rows * num_cols, false);
 
+      cout << "Shape from shading ..." << endl;
       const int max_iters = 3;
       int iters = 0;
       // [Shape from shading] main loop
       while(iters++ < max_iters){
+        cout << "iteration " << iters << endl;
         // [Shape from shading] step 1: fix albedo and normal map, estimate lighting coefficients
         {
           // ====================================================================
@@ -666,11 +677,11 @@ int main(int argc, char **argv) {
               is_good_pixel &= (face_boundary_indices.count(face_indices_maps[i][pidx]) == 0);
 
               auto pix = bundle.image.pixel(x, y);
-              const int SATURATED_THRESHOLD = 245;
+              const int SATURATED_THRESHOLD = 225;
               if(qRed(pix) + qGreen(pix) + qBlue(pix) > SATURATED_THRESHOLD * 3) {
                 is_good_pixel = false;
               }
-              const int DARK_PIXEL_THRESHOLD = 10;
+              const int DARK_PIXEL_THRESHOLD = 25;
               if(qRed(pix) + qGreen(pix) + qBlue(pix) < DARK_PIXEL_THRESHOLD * 3) {
                 is_good_pixel = false;
               }
@@ -763,78 +774,124 @@ int main(int argc, char **argv) {
           const int num_dof = 9;  // use first order approximation
 
           MatrixXd Y(num_constraints, num_dof);
-          MatrixXd A(num_constraints * 3, num_dof);
-          VectorXd b(num_constraints * 3);
+          MatrixXd A;
+          VectorXd b;
+          VectorXd l_i;
+          bool use_Lab_color = true;
 
-          #if 0
+          if(use_Lab_color) {
+            A = MatrixXd(num_constraints, num_dof);
+            b = VectorXd(num_constraints);
 
-          Y.col(0) = VectorXd::Ones(num_constraints);
-          Y.col(1) = normals_i.col(0);
-          Y.col(2) = normals_i.col(1);
-          Y.col(3) = normals_i.col(2);
-          Y.col(4) = normals_i.col(0).cwiseProduct(normals_i.col(1));
-          Y.col(5) = normals_i.col(0).cwiseProduct(normals_i.col(2));
-          Y.col(6) = normals_i.col(1).cwiseProduct(normals_i.col(2));
-          Y.col(7) = normals_i.col(0).cwiseProduct(normals_i.col(0)) - normals_i.col(1).cwiseProduct(normals_i.col(1));
-          Y.col(8) = 3 * normals_i.col(2).cwiseProduct(normals_i.col(2)) - VectorXd::Ones(num_constraints);
+            for(int j=0;j<num_constraints;++j) {
+              int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
 
-          VectorXd a_vec(num_constraints * 3);
-          a_vec.topRows(num_constraints) = albedos_i.col(0);
-          a_vec.middleRows(num_constraints, num_constraints) = albedos_i.col(1);
-          a_vec.bottomRows(num_constraints) = albedos_i.col(2);
+              cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(r, c);
+              double nx, ny, nz;
+              nx = pix[0], ny = pix[1], nz = pix[2];
 
-          A.topRows(num_constraints) = Y;
-          A.middleRows(num_constraints, num_constraints) = Y;
-          A.bottomRows(num_constraints) = Y;
-          for (int k = 0; k < num_dof; ++k) {
-            A.col(k) = A.col(k).cwiseProduct(a_vec);
+              cv::Vec3d pix_albedo = albedos[i].at<cv::Vec3d>(r, c);
+              double ar = pix_albedo[0], ag = pix_albedo[1], ab = pix_albedo[2];
+
+              auto pix_i = bundle.image.pixel(c, r);
+              double Ir = qRed(pix_i) / 255.0;
+              double Ig = qGreen(pix_i) / 255.0;
+              double Ib = qBlue(pix_i) / 255.0;
+
+              Vector3d Lab = rgb2lab(Ir, Ig, Ib);
+              Vector3d a_Lab = rgb2lab(ar, ag, ab);
+
+              Y.row(j) = sphericalharmonics(nx, ny, nz).transpose();
+
+              A.row(j) = Y.row(j) * a_Lab[0]; b(j) = Lab[0];
+            }
+
+            // Lighting regularization
+            const double w_reg = 0.0001 * num_constraints;
+            MatrixXd Afinal(num_constraints+9, 9);
+            Afinal.topRows(num_constraints) = A;
+            Afinal.bottomRows(9) = MatrixXd::Identity(9, 9) * w_reg;
+            VectorXd bfinal(num_constraints+9);
+            bfinal.topRows(num_constraints) = b;
+            bfinal.bottomRows(9) = VectorXd::Zero(9);
+
+            // ====================================================================
+            // solve linear least squares
+            // ====================================================================
+            l_i = Afinal.colPivHouseholderQr().solve(bfinal);
+          } else {
+            A = MatrixXd(num_constraints * 3, num_dof);
+            b = VectorXd(num_constraints * 3);
+
+            #if 0
+
+            Y.col(0) = VectorXd::Ones(num_constraints);
+            Y.col(1) = normals_i.col(0);
+            Y.col(2) = normals_i.col(1);
+            Y.col(3) = normals_i.col(2);
+            Y.col(4) = normals_i.col(0).cwiseProduct(normals_i.col(1));
+            Y.col(5) = normals_i.col(0).cwiseProduct(normals_i.col(2));
+            Y.col(6) = normals_i.col(1).cwiseProduct(normals_i.col(2));
+            Y.col(7) = normals_i.col(0).cwiseProduct(normals_i.col(0)) - normals_i.col(1).cwiseProduct(normals_i.col(1));
+            Y.col(8) = 3 * normals_i.col(2).cwiseProduct(normals_i.col(2)) - VectorXd::Ones(num_constraints);
+
+            VectorXd a_vec(num_constraints * 3);
+            a_vec.topRows(num_constraints) = albedos_i.col(0);
+            a_vec.middleRows(num_constraints, num_constraints) = albedos_i.col(1);
+            a_vec.bottomRows(num_constraints) = albedos_i.col(2);
+
+            A.topRows(num_constraints) = Y;
+            A.middleRows(num_constraints, num_constraints) = Y;
+            A.bottomRows(num_constraints) = Y;
+            for (int k = 0; k < num_dof; ++k) {
+              A.col(k) = A.col(k).cwiseProduct(a_vec);
+            }
+
+            b.topRows(num_constraints) = pixels_i.col(0);
+            b.middleRows(num_constraints, num_constraints) = pixels_i.col(1);
+            b.bottomRows(num_constraints) = pixels_i.col(2);
+
+            #else
+
+            for(int j=0;j<num_constraints;++j) {
+              int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+
+              cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(r, c);
+              double nx, ny, nz;
+              nx = pix[0], ny = pix[1], nz = pix[2];
+
+              cv::Vec3d pix_albedo = albedos[i].at<cv::Vec3d>(r, c);
+              double ar = pix_albedo[0], ag = pix_albedo[1], ab = pix_albedo[2];
+
+              auto pix_i = bundle.image.pixel(c, r);
+              double Ir = qRed(pix_i) / 255.0;
+              double Ig = qGreen(pix_i) / 255.0;
+              double Ib = qBlue(pix_i) / 255.0;
+
+              Y.row(j) = sphericalharmonics(nx, ny, nz).transpose();
+
+              A.row(j*3) = Y.row(j) * ar; b(j*3) = Ir;
+              A.row(j*3+1) = Y.row(j) * ag; b(j*3+1) = Ig;
+              A.row(j*3+2) = Y.row(j) * ab; b(j*3+2) = Ib;
+            }
+
+            #endif
+
+            // Lighting regularization
+            const double w_reg = 0.0001 * num_constraints;
+            MatrixXd Afinal(num_constraints*3+9, 9);
+            Afinal.topRows(num_constraints*3) = A;
+            Afinal.bottomRows(9) = MatrixXd::Identity(9, 9) * w_reg;
+            VectorXd bfinal(num_constraints*3+9);
+            bfinal.topRows(num_constraints*3) = b;
+            bfinal.bottomRows(9) = VectorXd::Zero(9);
+
+            // ====================================================================
+            // solve linear least squares
+            // ====================================================================
+            l_i = Afinal.colPivHouseholderQr().solve(bfinal);
           }
 
-          b.topRows(num_constraints) = pixels_i.col(0);
-          b.middleRows(num_constraints, num_constraints) = pixels_i.col(1);
-          b.bottomRows(num_constraints) = pixels_i.col(2);
-
-          #else
-
-          for(int j=0;j<num_constraints;++j) {
-            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
-
-            cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(r, c);
-            double nx, ny, nz;
-            nx = pix[0], ny = pix[1], nz = pix[2];
-
-            cv::Vec3d pix_albedo = albedos[i].at<cv::Vec3d>(r, c);
-            double ar = pix_albedo[0], ag = pix_albedo[1], ab = pix_albedo[2];
-
-            auto pix_i = bundle.image.pixel(c, r);
-            double Ir = qRed(pix_i) / 255.0;
-            double Ig = qGreen(pix_i) / 255.0;
-            double Ib = qBlue(pix_i) / 255.0;
-
-            Y.row(j) = sphericalharmonics(nx, ny, nz).transpose();
-
-            A.row(j*3) = Y.row(j) * ar; b(j*3) = Ir;
-            A.row(j*3+1) = Y.row(j) * ag; b(j*3+1) = Ig;
-            A.row(j*3+2) = Y.row(j) * ab; b(j*3+2) = Ib;
-          }
-
-          #endif
-
-          // Lighting regularization
-          const double w_reg = 0.0001 * num_constraints;
-          MatrixXd Afinal(num_constraints*3+9, 9);
-          Afinal.topRows(num_constraints*3) = A;
-          Afinal.bottomRows(9) = MatrixXd::Identity(9, 9) * w_reg;
-          VectorXd bfinal(num_constraints*3+9);
-          bfinal.topRows(num_constraints*3) = b;
-          bfinal.bottomRows(9) = VectorXd::Zero(9);
-
-          // ====================================================================
-          // solve linear least squares
-          // ====================================================================
-          //VectorXd l_i = A.jacobiSvd(ComputeThinU | ComputeThinV).solve(b);
-          //VectorXd l_i = Afinal.colPivHouseholderQr().solve(bfinal);
-          VectorXd l_i = (A.transpose() * A).ldlt().solve(A.transpose() * b);
           const double relax_factor = 1.0;
           lighting_coeffs[i] = (1.0 - relax_factor) * lighting_coeffs[i] + relax_factor * l_i;
           cout << l_i.transpose() << endl;
@@ -891,7 +948,7 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 1000.0 / pow(2, (iters - 1));
+          const double lambda2 = 256.0 / pow(2, (iters - 1));
 
           // ====================================================================
           // collect valid pixels
@@ -1126,7 +1183,8 @@ int main(int argc, char **argv) {
 
         // [Shape from shading] step 3: fix albedo and lighting, estimate normal map
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
-        for(int iii=0;iii<3;++iii){
+        const int iters_normal = 5;
+        for(int iii=0;iii<iters_normal;++iii){
 
           // ====================================================================
           // collect valid pixels
@@ -1468,7 +1526,7 @@ int main(int argc, char **argv) {
             cout << summary.BriefReport() << endl;
           }
 
-#if 0
+#if 1
           VectorXd dtheta = theta - theta0;
           VectorXd dphi = phi - phi0;
 
@@ -1799,7 +1857,7 @@ int main(int argc, char **argv) {
         Eigen::SparseMatrix<double> eye(num_constraints, num_constraints);
         for(int j=0;j<num_constraints;++j) eye.insert(j, j) = 1e-16;
 
-        Eigen::SparseMatrix<double> AtA = (A.transpose() * A).pruned().eval();
+        Eigen::SparseMatrix<double> AtA = A.transpose() * A;
         //AtA.makeCompressed();
 
         cout << AtA.rows() << 'x' << AtA.cols() << endl;
