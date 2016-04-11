@@ -684,11 +684,17 @@ int main(int argc, char **argv) {
       cout << "Shape from shading ..." << endl;
       const int max_iters = 3;
       int iters = 0;
+
+      double second_order_weights = 0;
+      const double second_order_scale = 0.0;
+
       // [Shape from shading] main loop
       while(iters++ < max_iters){
         cout << "iteration " << iters << endl;
         // [Shape from shading] step 1: fix albedo and normal map, estimate lighting coefficients
         {
+          second_order_weights = min((iters - 1) / static_cast<double>(max_iters - 1), 1.0) * second_order_scale;
+
           // ====================================================================
           // collect valid pixels
           // ====================================================================
@@ -804,7 +810,7 @@ int main(int argc, char **argv) {
           MatrixXd A;
           VectorXd b;
           VectorXd l_i;
-          bool use_Lab_color = true;
+          bool use_Lab_color = false;
 
           if(use_Lab_color) {
             A = MatrixXd(num_constraints, num_dof);
@@ -841,6 +847,9 @@ int main(int argc, char **argv) {
             VectorXd bfinal(num_constraints+9);
             bfinal.topRows(num_constraints) = b;
             bfinal.bottomRows(9) = VectorXd::Zero(9);
+
+            // Apply weights to
+            Afinal.rightCols(5) *= second_order_weights;
 
             // ====================================================================
             // solve linear least squares
@@ -912,6 +921,9 @@ int main(int argc, char **argv) {
             VectorXd bfinal(num_constraints*3+9);
             bfinal.topRows(num_constraints*3) = b;
             bfinal.bottomRows(9) = VectorXd::Zero(9);
+
+            // Apply weights to
+            Afinal.rightCols(5) *= second_order_weights;
 
             // ====================================================================
             // solve linear least squares

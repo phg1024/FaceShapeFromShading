@@ -308,9 +308,12 @@ static QImage TransferColor(const QImage& source, const QImage& target,
 
   // Do the transfer
   MatrixXd res(3, num_pixels_s);
+
+  // Transfer color by shifting
   for(int i=0;i<3;++i) {
     for(int j=0;j<num_pixels_s;++j) {
-      res(i, j) = (lab_s(i, j) - mean_s[i]) * std_t[i] / std_s[i] + mean_t[i];
+      //res(i, j) = (lab_s(i, j) - mean_s[i]) * std_t[i] / std_s[i] + mean_t[i];
+      res(i, j) = lab_s(i, j) - mean_s[i] + mean_t[i];
     }
   }
 
