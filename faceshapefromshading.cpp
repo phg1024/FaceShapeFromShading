@@ -16,9 +16,6 @@
 
 #include "common.h"
 #include "cost_functions.h"
-#include "MultilinearReconstruction/OffscreenMeshVisualizer.h"
-#include "MultilinearReconstruction/statsutils.h"
-#include "utils.h"
 
 #include "ceres/ceres.h"
 
@@ -27,6 +24,8 @@
 #include <MultilinearReconstruction/ioutilities.h>
 #include <MultilinearReconstruction/multilinearmodel.h>
 #include <MultilinearReconstruction/parameters.h>
+#include <MultilinearReconstruction/OffscreenMeshVisualizer.h>
+#include <MultilinearReconstruction/statsutils.h>
 
 #include "boost/filesystem/operations.hpp"
 #include "boost/filesystem/path.hpp"
@@ -34,123 +33,8 @@
 
 namespace fs = boost::filesystem;
 
-struct PixelInfo {
-  PixelInfo() : fidx(-1) {}
-  PixelInfo(int fidx, glm::vec3 bcoords) : fidx(fidx), bcoords(bcoords) {}
-
-  int fidx;           // trinagle index
-  glm::vec3 bcoords;  // bary centric coordinates
-};
-
-struct ImageBundle {
-  ImageBundle() {}
-  ImageBundle(const QImage& image, const vector<Constraint2D>& points, const ReconstructionResult& params)
-    : image(image), points(points), params(params) {}
-  QImage image;
-  vector<Constraint2D> points;
-  ReconstructionResult params;
-};
-
-QImage GetIndexMap(const string& albedo_index_map_filename,
-                   const BasicMesh& mesh,
-                   bool generate_index_map = true) {
-  const int tex_size = 2048;
-  QImage albedo_index_map;
-  if(QFile::exists(albedo_index_map_filename.c_str()) && (!generate_index_map)) {
-    PhGUtils::message("loading index map for albedo.");
-    albedo_index_map = QImage(albedo_index_map_filename.c_str());
-    albedo_index_map.save("albedo_index.png");
-  } else {
-    OffscreenMeshVisualizer visualizer(tex_size, tex_size);
-    visualizer.BindMesh(mesh);
-    visualizer.SetRenderMode(OffscreenMeshVisualizer::Texture);
-    visualizer.SetMVPMode(OffscreenMeshVisualizer::OrthoNormal);
-    QImage img = visualizer.Render();
-    img.save("albedo_index.png");
-    albedo_index_map = img;
-  }
-  return albedo_index_map;
-}
-
-pair<QImage, vector<vector<PixelInfo>>> GetPixelCoordinatesMap(
-  const string& albedo_pixel_map_filename,
-  const QImage& albedo_index_map,
-  const BasicMesh& mesh,
-  bool gen_pixel_map = false) {
-
-  const int tex_size = 2048;
-
-  vector<vector<PixelInfo>> albedo_pixel_map(tex_size, vector<PixelInfo>(tex_size));
-
-  // Generate pixel map for albedo
-  QImage pixel_map_image;
-  if(QFile::exists(albedo_pixel_map_filename.c_str()) && (!gen_pixel_map)) {
-    pixel_map_image = QImage(albedo_pixel_map_filename.c_str());
-
-    PhGUtils::message("generating pixel map for albedo ...");
-    boost::timer::auto_cpu_timer t("pixel map for albedo generation time = %w seconds.\n");
-
-    for(int i=0;i<tex_size;++i) {
-      for(int j=0;j<tex_size;++j) {
-        QRgb pix = albedo_index_map.pixel(j, i);
-        unsigned char r = static_cast<unsigned char>(qRed(pix));
-        unsigned char g = static_cast<unsigned char>(qGreen(pix));
-        unsigned char b = static_cast<unsigned char>(qBlue(pix));
-        if(r == 0 && g == 0 && b == 0) continue;
-        int fidx;
-        decode_index(r, g, b, fidx);
-
-        QRgb bcoords_pix = pixel_map_image.pixel(j, i);
-
-        float x = static_cast<float>(qRed(bcoords_pix)) / 255.0f;
-        float y = static_cast<float>(qGreen(bcoords_pix)) / 255.0f;
-        float z = static_cast<float>(qBlue(bcoords_pix)) / 255.0f;
-        albedo_pixel_map[i][j] = PixelInfo(fidx, glm::vec3(x, y, z));
-      }
-    }
-    PhGUtils::message("done.");
-  } else {
-    /// @FIXME antialiasing issue because of round-off error
-    pixel_map_image = QImage(tex_size, tex_size, QImage::Format_ARGB32);
-    pixel_map_image.fill(0);
-    PhGUtils::message("generating pixel map for albedo ...");
-    boost::timer::auto_cpu_timer t("pixel map for albedo generation time = %w seconds.\n");
-
-    for(int i=0;i<tex_size;++i) {
-      for(int j=0;j<tex_size;++j) {
-        double y = 1.0 - (i + 0.5) / static_cast<double>(tex_size);
-        double x = (j + 0.5) / static_cast<double>(tex_size);
-
-        QRgb pix = albedo_index_map.pixel(j, i);
-        unsigned char r = static_cast<unsigned char>(qRed(pix));
-        unsigned char g = static_cast<unsigned char>(qGreen(pix));
-        unsigned char b = static_cast<unsigned char>(qBlue(pix));
-        if(r == 0 && g == 0 && b == 0) continue;
-        int fidx;
-        decode_index(r, g, b, fidx);
-
-        auto f = mesh.face_texture(fidx);
-        auto t0 = mesh.texture_coords(f[0]), t1 = mesh.texture_coords(f[1]), t2 = mesh.texture_coords(f[2]);
-
-        using PhGUtils::Point3f;
-        using PhGUtils::Point2d;
-        Point3f bcoords;
-        // Compute barycentric coordinates
-        PhGUtils::computeBarycentricCoordinates(Point2d(x, y),
-                                                Point2d(t0[0], t0[1]), Point2d(t1[0], t1[1]), Point2d(t2[0], t2[1]),
-                                                bcoords);
-        //cerr << bcoords << endl;
-        albedo_pixel_map[i][j] = PixelInfo(fidx, glm::vec3(bcoords.x, bcoords.y, bcoords.z));
-
-        pixel_map_image.setPixel(j, i, qRgb(bcoords.x*255, bcoords.y*255, bcoords.z*255));
-      }
-      pixel_map_image.save("albedo_pixel.jpg");
-    }
-    PhGUtils::message("done.");
-  }
-
-  return make_pair(pixel_map_image, albedo_pixel_map);
-}
+#include "defs.h"
+#include "utils.h"
 
 int main(int argc, char **argv) {
   QApplication a(argc, argv);
