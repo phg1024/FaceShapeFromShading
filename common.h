@@ -2,6 +2,7 @@
 #define FACESHAPEFROMSHADING_COMMON_H_H
 
 #include <iostream>
+#include <iomanip>
 #include <vector>
 #include <map>
 #include <set>
@@ -11,6 +12,8 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <queue>
+#include <iterator>
+#include <string>
 #include <limits.h>
 using namespace std;
 

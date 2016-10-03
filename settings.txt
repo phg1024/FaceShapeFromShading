@@ -1,0 +1,28 @@
+{
+  "max_iters": 3,
+  "albedo": {
+    "lambda": 256.0
+  },
+  "lighting": {
+    "saturated_pixels_threshold": 225,
+    "dark_pixels_threshold": 25,
+    "albedo_distance_bins": 1000,
+    "lighting_pixels_ratio_lower": 1.0,
+    "lighting_pixels_ratio_upper": 1.0,
+    "num_dof": 9,
+    "w_reg": 0.0001,
+    "relaxation": 1.0
+  },
+  "depth": {
+    "num_iters": 3,
+    "w_data": 1.0,
+    "w_int": 0.0,
+    "w_reg": 0.0,
+    "w_smooth": 0.0,
+    "integrability_threshold": 64.0,
+    "optimization": {
+      "max_iters": 10,
+      "init_tr_radius": 0.1
+    }
+  }
+}

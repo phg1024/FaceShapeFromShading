@@ -6,6 +6,119 @@
 #include "ceres/ceres.h"
 #include "utils.h"
 
+struct DepthMapDataTerm {
+  DepthMapDataTerm(double Ir, double Ig, double Ib,
+                   double ar, double ag, double ab,
+                   const VectorXd& lighting_coeffs,
+                   double dx, double dy,
+                   double weight = 1.0)
+    : I(Vector3d(Ir, Ig, Ib)), a(Vector3d(ar, ag, ab)),
+      lighting_coeffs(lighting_coeffs), dx(dx), dy(dy), weight(weight) {}
+
+  ~DepthMapDataTerm() {}
+
+  bool operator()(double const * const * parameters, double *residuals) const {
+    double z = parameters[0][0], z_l = parameters[1][0], z_u = parameters[2][0];
+
+    double p = (z - z_l) / dx;
+    double q = (z_u - z) / dy;
+
+    double nx, ny, nz;
+
+    double N = p * p + q * q + 1;
+    nx = p / N; ny = q / N; nz = 1 / N;
+
+    VectorXd Y = sphericalharmonics(nx, ny, nz);
+
+    double LdotY = lighting_coeffs.transpose() * Y;
+
+    Vector3d f = I - a * LdotY;
+
+    residuals[0] = f[0] * weight;
+    residuals[1] = f[1] * weight;
+    residuals[2] = f[2] * weight;
+
+    return true;
+  }
+
+  Vector3d I, a;
+  VectorXd lighting_coeffs;
+  double dx, dy;
+  double weight;
+};
+
+struct DepthMapIntegrabilityTerm {
+  DepthMapIntegrabilityTerm(double dx, double dy, double weight = 1.0)
+    : dx(dx), dy(dy), weight(weight) {}
+
+  ~DepthMapIntegrabilityTerm() {}
+
+  bool operator()(double const * const * parameters, double *residuals) const {
+    double z = parameters[0][0], z_l = parameters[1][0];
+    double z_u = parameters[2][0], z_ul = parameters[3][0];
+    double z_uu = parameters[4][0], z_ll = parameters[5][0];
+
+    const double epsilon = 1e-16;
+
+    auto get_normal = [&epsilon](double z, double z_u, double z_l, double dx, double dy) {
+      double p = (z - z_l) / dx;
+      double q = (z_u - z) / dy;
+
+      double nx, ny, nz;
+
+      double N = p * p + q * q + 1;
+
+      nx = p / N; ny = q / N; nz = 1 / N;
+      return make_tuple(nx, ny, nz);
+    };
+
+    double nx, ny, nz; tie(nx, ny, nz) = get_normal(z, z_u, z_l, dx, dy);
+    double nx_l, ny_l, nz_l; tie(nx_l, ny_l, nz_l) = get_normal(z_l, z_ul, z_ll, dx, dy);
+    double nx_u, ny_u, nz_u; tie(nx_u, ny_u, nz_u) = get_normal(z_u, z_uu, z_ul, dx, dy);
+
+    double denom = nz * nz_u * nz_l;
+    double int_val = (nx_u * nz * nz_l - nx * nz_l * nz_u) - (ny * nz_l * nz_u - ny_l * nz * nz_u);
+
+    if( fabs(denom) < epsilon) denom = denom>0?epsilon:-epsilon;
+    int_val = int_val / epsilon;
+
+    residuals[0] = int_val * weight;
+
+    return true;
+  }
+
+  double dx, dy;
+  double weight;
+};
+
+struct DepthMapRegularizationTerm {
+  DepthMapRegularizationTerm(const vector<pair<int, double>>& info,
+                             double z_ref_LoG,
+                             double weight)
+    : info(info), z_ref_LoG(z_ref_LoG), weight(weight) {}
+
+  bool operator()(double const * const * parameters, double *residuals) const {
+    double z_LoG = 0;
+
+    for(int i=0;i<info.size();++i) {
+      auto& reginfo = info[i];
+      double kval = reginfo.second;
+
+      double zval = parameters[i][0];
+
+      z_LoG += zval * kval;
+    }
+
+    residuals[0] = (z_LoG - z_ref_LoG) * weight;
+
+    return true;
+  }
+
+  vector<pair<int, double>> info;
+  double z_ref_LoG;
+  double weight;
+};
+
 struct NormalMapDataTerm {
   NormalMapDataTerm(double Ir, double Ig, double Ib,
                     double ar, double ag, double ab,
@@ -106,7 +219,6 @@ struct NormalMapDataTerm_analytic : public ceres::CostFunction {
   VectorXd lighting_coeffs;
   double weight;
 };
-
 
 struct NormalMapIntegrabilityTerm {
   NormalMapIntegrabilityTerm(double dx, double dy, double weight) : dx(dx), dy(dy), weight(weight) {}
@@ -302,7 +414,6 @@ struct NormalMapSmoothnessTerm {
   double dx, dy;
   double weight;
 };
-
 
 struct NormalMapRegularizationTerm {
   NormalMapRegularizationTerm(const vector<pair<int, double>>& info,

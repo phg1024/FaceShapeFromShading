@@ -15,7 +15,6 @@
 #include <opencv2/opencv.hpp>
 
 #include "common.h"
-#include "cost_functions.h"
 
 #include "ceres/ceres.h"
 
@@ -27,12 +26,16 @@
 #include <MultilinearReconstruction/OffscreenMeshVisualizer.h>
 #include <MultilinearReconstruction/statsutils.h>
 
-#include "boost/filesystem/operations.hpp"
-#include "boost/filesystem/path.hpp"
+#include <boost/filesystem/operations.hpp>
+#include <boost/filesystem/path.hpp>
 #include <boost/timer/timer.hpp>
 
 namespace fs = boost::filesystem;
 
+#include "json/src/json.hpp"
+using json = nlohmann::json;
+
+#include "cost_functions.h"
 #include "defs.h"
 #include "utils.h"
 
@@ -41,6 +44,12 @@ int main(int argc, char **argv) {
   glutInit(&argc, argv);
 
   //google::InitGoogleLogging(argv[0]);
+
+  // load the settings file
+  PhGUtils::message("Loading global settings ...");
+  json global_settings = json::parse(ifstream("/home/phg/Codes/FaceShapeFromShading/settings.txt"));
+  PhGUtils::message("done.");
+  cout << setw(2) << global_settings << endl;
 
   const string model_filename("/home/phg/Data/Multilinear/blendshape_core.tensor");
   const string id_prior_filename("/home/phg/Data/Multilinear/blendshape_u_0_aug.tensor");
@@ -131,6 +140,23 @@ int main(int argc, char **argv) {
   vector<vector<double>> mean_texture_weight(tex_size, vector<double>(tex_size, 0));
 
   // Collect texture information from each input (image, mesh) pair to obtain mean texture
+  #if 0
+  QImage mean_texture_image;
+  vector<vector<int>> face_indices_maps;
+  tie(mean_texture_image, face_indices_maps) = GenerateMeanTexture(
+    image_bundles,
+    model,
+    mesh,
+    tex_size,
+    albedo_pixel_map,
+    mean_texture,
+    mean_texture_weight,
+    mean_texture_mat,
+    mean_albedo_filename,
+    results_path,
+    true
+  );
+  #else
   bool generate_mean_texture = true;
   QImage mean_texture_image;
   vector<vector<int>> face_indices_maps;
@@ -275,6 +301,7 @@ int main(int argc, char **argv) {
       mean_texture_image.save( (results_path / fs::path("mean_texture.png")).string().c_str() );
     }
   }
+  #endif
 
   // [Shape from shading]
   {
@@ -295,6 +322,8 @@ int main(int argc, char **argv) {
     vector<cv::Mat> albedos_ref(num_images);
     vector<cv::Mat> albedos_ref_LoG(num_images);
     vector<cv::Mat> albedos(num_images);
+
+    vector<vector<glm::ivec2>> valid_depth_pixels(num_images);
 
     // generate reference normal map and depth map
     for(int i=0;i<num_images;++i) {
@@ -547,6 +576,14 @@ int main(int argc, char **argv) {
         }
       }
 
+      cv::filter2D(depth_maps_ref[i], depth_maps_ref_LoG[i], -1, LoG_kernel, cv::Point(-1, -1), 0, cv::BORDER_REPLICATE);
+      VectorXd depth_map_ref_LoG_i(num_rows*num_cols);
+      for(int r=0, pidx=0;r<num_rows;++r) {
+        for(int c=0;c<num_cols;++c,++pidx) {
+          normal_map_ref_LoG_i(pidx) = depth_maps_ref_LoG[i].at<double>(r, c);
+        }
+      }
+
       cv::Mat dzmapdx, dzmapdy;
       cv::Sobel(zmaps[i], dzmapdx, -1, 1, 0);
       cv::Sobel(zmaps[i], dzmapdy, -1, 0, 1);
@@ -566,7 +603,7 @@ int main(int argc, char **argv) {
       vector<bool> is_boundary(num_rows * num_cols, false);
 
       cout << "Shape from shading ..." << endl;
-      const int max_iters = 3;
+      const int max_iters = global_settings["max_iters"];
       int iters = 0;
 
       double second_order_weights = 0;
@@ -594,11 +631,11 @@ int main(int argc, char **argv) {
               is_good_pixel &= (face_boundary_indices.count(face_indices_maps[i][pidx]) == 0);
 
               auto pix = bundle.image.pixel(x, y);
-              const int SATURATED_THRESHOLD = 225;
+              const int SATURATED_THRESHOLD = global_settings["lighting"]["saturated_pixels_threshold"];
               if(qRed(pix) + qGreen(pix) + qBlue(pix) > SATURATED_THRESHOLD * 3) {
                 is_good_pixel = false;
               }
-              const int DARK_PIXEL_THRESHOLD = 25;
+              const int DARK_PIXEL_THRESHOLD = global_settings["lighting"]["dark_pixels_threshold"];
               if(qRed(pix) + qGreen(pix) + qBlue(pix) < DARK_PIXEL_THRESHOLD * 3) {
                 is_good_pixel = false;
               }
@@ -629,7 +666,7 @@ int main(int argc, char **argv) {
           vector<double> albedo_distances_i_sorted = albedo_distances_i_vec;
           std::sort(albedo_distances_i_sorted.begin(), albedo_distances_i_sorted.end());
 
-          const int nbins = 1000;
+          const int nbins = global_settings["lighting"]["albedo_distance_bins"];
           vector<int> counter(nbins, 0);
           double max_albedo_distance = albedo_distances_i_sorted.back(), min_albedo_distance = albedo_distances_i_sorted.front();
           double diff_albedo_distance = max(max_albedo_distance - min_albedo_distance, 1e-16);
@@ -641,8 +678,8 @@ int main(int argc, char **argv) {
           for(int j=1;j<nbins;++j) {
             counter[j] += counter[j-1];
           }
-          const double lighting_pixels_ratio_lower = 1.00;
-          const double lighting_pixels_ratio_upper = 1.00;
+          const double lighting_pixels_ratio_lower = global_settings["lighting"]["lighting_pixels_ratio_lower"];
+          const double lighting_pixels_ratio_upper = global_settings["lighting"]["lighting_pixels_ratio_upper"];
           double lighting_pixels_ratio = iters / (double)max_iters * lighting_pixels_ratio_upper + (1.0 - iters / (double) max_iters) * lighting_pixels_ratio_lower;
           const int cutoff_count = *std::lower_bound(counter.begin(), counter.end(), static_cast<int>(lighting_pixels_ratio*albedo_distances_i_sorted.size()));
           cout << "num constraints [before]: " << pixel_indices_i.size() << endl;
@@ -688,7 +725,7 @@ int main(int argc, char **argv) {
           // ====================================================================
           // assemble matrices
           // ====================================================================
-          const int num_dof = 9;  // use first order approximation
+          const int num_dof = global_settings["lighting"]["num_dof"];
 
           MatrixXd Y(num_constraints, num_dof);
           MatrixXd A;
@@ -798,7 +835,7 @@ int main(int argc, char **argv) {
             #endif
 
             // Lighting regularization
-            const double w_reg = 0.0001 * num_constraints;
+            const double w_reg = double(global_settings["lighting"]["w_reg"]) * num_constraints;
             MatrixXd Afinal(num_constraints*3+9, 9);
             Afinal.topRows(num_constraints*3) = A;
             Afinal.bottomRows(9) = MatrixXd::Identity(9, 9) * w_reg;
@@ -815,7 +852,7 @@ int main(int argc, char **argv) {
             l_i = Afinal.colPivHouseholderQr().solve(bfinal);
           }
 
-          const double relax_factor = 1.0;
+          const double relax_factor = global_settings["lighting"]["relaxation"];
           lighting_coeffs[i] = (1.0 - relax_factor) * lighting_coeffs[i] + relax_factor * l_i;
           cout << l_i.transpose() << endl;
 
@@ -846,12 +883,12 @@ int main(int argc, char **argv) {
           }
           image_with_lighting.save( (results_path / fs::path("lighting_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str() );
 
-          QImage lighting_coeffs_image(512, 512, QImage::Format_ARGB32);
+          QImage lighting_coeffs_image(256, 256, QImage::Format_ARGB32);
           lighting_coeffs_image.fill(0);
-          for(int r=0;r<512;++r) {
-            double y = (255 - r)/255.0;
-            for(int c=0;c<512;++c) {
-              double x = (c - 255)/255.0;
+          for(int r=0;r<256;++r) {
+            double y = (127 - r)/127.0;
+            for(int c=0;c<256;++c) {
+              double x = (c - 127)/127.0;
               if(x*x + y*y <= 1.0) {
                 // x = sin(theta)*sin(phi)
                 // y = sin(theta)*cos(phi)
@@ -871,7 +908,7 @@ int main(int argc, char **argv) {
         // [Shape from shading] step 2: fix depth and lighting, estimate albedo
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
         {
-          const double lambda2 = 256.0 / pow(2, (iters - 1));
+          const double lambda2 = double(global_settings["albedo"]["lambda"]) / pow(2, (iters - 1));
 
           // ====================================================================
           // collect valid pixels
@@ -1106,75 +1143,83 @@ int main(int argc, char **argv) {
 
         // [Shape from shading] step 3: fix albedo and lighting, estimate normal map
         // @NOTE Construct the problem for whole image, then solve for valid pixels only
-        const int iters_normal = 5;
-        for(int iii=0;iii<iters_normal;++iii){
+        const int iters_depth = global_settings["depth"]["num_iters"];
+        for(int iii=0;iii<iters_depth;++iii){
 
           // ====================================================================
           // collect valid pixels
           // ====================================================================
           vector<glm::ivec2> pixel_indices_i;
+          if (valid_depth_pixels[i].empty()) {
+            cv::Mat boundary_pixel_image(num_rows, num_cols, CV_8U);
+            cv::Mat valid_pixel_image(num_rows, num_cols, CV_8U);
+            for (int y = 0; y < normal_maps[i].rows; ++y) {
+              for (int x = 0; x < normal_maps[i].cols; ++x) {
+                boundary_pixel_image.at<unsigned char>(y, x) = 0;
+                valid_pixel_image.at<unsigned char>(y, x) = 0;
 
-          cv::Mat boundary_pixel_image(num_rows, num_cols, CV_8U);
-          cv::Mat valid_pixel_image(num_rows, num_cols, CV_8U);
-          for (int y = 0; y < normal_maps[i].rows; ++y) {
-            for (int x = 0; x < normal_maps[i].cols; ++x) {
-              boundary_pixel_image.at<unsigned char>(y, x) = 0;
-              valid_pixel_image.at<unsigned char>(y, x) = 0;
+                float zval = zmaps[i].at<float>(y, x);
+                if (zval < -1e5) continue;
+                else {
 
-              float zval = zmaps[i].at<float>(y, x);
-              if (zval < -1e5) continue;
-              else {
-                pixel_indices_i.push_back(glm::ivec2(y, x));
-                valid_pixel_image.at<unsigned char>(y, x) = 255;
+                  bool flag = false;//face_boundary_indices.count(face_indices_maps[i][y*num_cols+x]);
+                  flag |= zmaps[i].at<float>(y-1, x) < -1e5;
+                  flag |= zmaps[i].at<float>(y+1, x) < -1e5;
+                  flag |= zmaps[i].at<float>(y, x-1) < -1e5;
+                  flag |= zmaps[i].at<float>(y, x+1) < -1e5;
 
-                bool flag = false;//face_boundary_indices.count(face_indices_maps[i][y*num_cols+x]);
-                flag |= zmaps[i].at<float>(y-1, x) < -1e5;
-                flag |= zmaps[i].at<float>(y+1, x) < -1e5;
-                flag |= zmaps[i].at<float>(y, x-1) < -1e5;
-                flag |= zmaps[i].at<float>(y, x+1) < -1e5;
-
-                if(flag) {
-                  boundary_pixel_image.at<unsigned char>(y, x) = 255;
-                  is_boundary[y*num_cols+x] = true;
+                  if(flag) {
+                    boundary_pixel_image.at<unsigned char>(y, x) = 255;
+                    is_boundary[y*num_cols+x] = true;
+                  } else {
+                    pixel_indices_i.push_back(glm::ivec2(y, x));
+                    valid_pixel_image.at<unsigned char>(y, x) = 255;
+                  }
                 }
               }
             }
-          }
 
-          // Filter out edges
-          for(int r=0;r<num_rows;++r) {
-            for(int c=0;c<num_cols;++c) {
-              cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(r, c);
-              double nx = pix[0], ny = pix[1], nz = pix[2];
+            // Filter out edges
+            for(int r=0;r<num_rows;++r) {
+              for(int c=0;c<num_cols;++c) {
+                cv::Vec3d pix = normal_maps[i].at<cv::Vec3d>(r, c);
+                double nx = pix[0], ny = pix[1], nz = pix[2];
 
-              cv::Vec3d pix_u = normal_maps[i].at<cv::Vec3d>(r-1, c);
-              double nx_u, ny_u, nz_u;
-              nx_u = pix_u[0]; ny_u = pix_u[1]; nz_u = pix_u[2];
+                cv::Vec3d pix_u = normal_maps[i].at<cv::Vec3d>(r-1, c);
+                double nx_u, ny_u, nz_u;
+                nx_u = pix_u[0]; ny_u = pix_u[1]; nz_u = pix_u[2];
 
-              cv::Vec3d pix_l = normal_maps[i].at<cv::Vec3d>(r, c-1);
-              double nx_l, ny_l, nz_l;
-              nx_l = pix_l[0]; ny_l = pix_l[1]; nz_l = pix_l[2];
+                cv::Vec3d pix_l = normal_maps[i].at<cv::Vec3d>(r, c-1);
+                double nx_l, ny_l, nz_l;
+                nx_l = pix_l[0]; ny_l = pix_l[1]; nz_l = pix_l[2];
 
-              auto round_off = [](double val, double eps) {
-                if(fabs(val) < eps) {
-                  return val>0?eps:-eps;
-                } else return val;
-              };
-              double nxnz = nx / round_off(nz, 1e-16);
-              double nynz = ny / round_off(nz, 1e-16);
-              double nxnz_u = nx_u / round_off(nz_u, 1e-16);
-              double nynz_l = ny_l / round_off(nz_l, 1e-16);
-              double integrability_val = clamp<double>(fabs((nxnz_u - nxnz) - (nynz - nynz_l)) * 255.0, 0, 255);
+                auto round_off = [](double val, double eps) {
+                  if(fabs(val) < eps) {
+                    return val>0?eps:-eps;
+                  } else return val;
+                };
+                double nxnz = nx / round_off(nz, 1e-16);
+                double nynz = ny / round_off(nz, 1e-16);
+                double nxnz_u = nx_u / round_off(nz_u, 1e-16);
+                double nynz_l = ny_l / round_off(nz_l, 1e-16);
+                double integrability_val = clamp<double>(fabs((nxnz_u - nxnz) - (nynz - nynz_l)) * 255.0, 0, 255);
 
-              if(integrability_val > 64.0) {
-                boundary_pixel_image.at<unsigned char>(r, c) = 255;
-                is_boundary[r*num_cols+c] = true;
+                const double integrability_threshold = global_settings["depth"]["integrability_threshold"];
+                if(integrability_val > integrability_threshold) {
+                  boundary_pixel_image.at<unsigned char>(r, c) = 255;
+                  is_boundary[r*num_cols+c] = true;
+                }
               }
             }
+
+            cv::imwrite( (results_path / fs::path("boundary_pixels_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str(), boundary_pixel_image );
+            cv::imwrite( (results_path / fs::path("valid_pixels_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str(), valid_pixel_image );
+
+            valid_depth_pixels[i] = pixel_indices_i;
+          } else {
+            pixel_indices_i = valid_depth_pixels[i];
           }
 
-          cv::imwrite( (results_path / fs::path("boundary_pixels_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str(), boundary_pixel_image );
-          cv::imwrite( (results_path / fs::path("valid_pixels_" + std::to_string(i) + "_" + std::to_string(iters) + ".png")).string().c_str(), valid_pixel_image );
 
           // ====================================================================
           // collect constraints from valid pixels
@@ -1212,6 +1257,8 @@ int main(int argc, char **argv) {
             pixel_index_map[pidx] = j;
           }
 
+#define USE_THETA_PHI 0
+#if USE_THETA_PHI
           ceres::Problem problem;
           VectorXd theta(num_constraints), phi(num_constraints);
 
@@ -1264,10 +1311,10 @@ int main(int argc, char **argv) {
             phi_image.save( (results_path / fs::path("phi_" + std::to_string(i) + "_" + std::to_string(0) + ".png")).string().c_str() );
           }
 
-          const double w_data = 1.0;
-          const double w_reg = 0.025;
-          const double w_integrability = 1.0;
-          const double w_smoothness = 0.1;
+          const double w_data = global_settings["depth"]["w_data"];
+          const double w_reg = global_settings["depth"]["w_reg"];
+          const double w_integrability = global_settings["depth"]["w_int"];
+          const double w_smoothness = global_settings["depth"]["w_smooth"];
 
           #define USE_ANALYTIC_COST_FUNCTIONS 1
           PhGUtils::message("Assembling cost functions ...");
@@ -1384,8 +1431,8 @@ int main(int argc, char **argv) {
             }
             #endif
 
-            #if 0
             // regularization term
+            #if 0
             for(int j = 0; j < num_constraints; ++j) {
               int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
               int pidx = r * num_cols + c;
@@ -1449,7 +1496,8 @@ int main(int argc, char **argv) {
             cout << summary.BriefReport() << endl;
           }
 
-#if 1
+#define THRESHOLD_NORMAL_CHANGE 1
+#if THRESHOLD_NORMAL_CHANGE
           VectorXd dtheta = theta - theta0;
           VectorXd dphi = phi - phi0;
 
@@ -1469,7 +1517,7 @@ int main(int argc, char **argv) {
           const double angle_update_relax_factor = 0.5;
           theta = theta0 + dtheta * angle_update_relax_factor;
           phi = phi0 + dphi * angle_update_relax_factor;
-#endif
+#endif  // THRESHOLD_NORMAL_CHANGE
 
           // update normal map
           cv::Mat normal_map_blurred(num_rows, num_cols, CV_32FC3);
@@ -1497,6 +1545,208 @@ int main(int argc, char **argv) {
             cv::Vec3f pix_j = normal_map_blurred.at<cv::Vec3f>(r, c);
             normal_maps[i].at<cv::Vec3d>(r, c) = cv::Vec3d(pix_j[0], pix_j[1], pix_j[2]);
           }
+
+#else  // USE_THETA_PHI
+          {
+            // Optimize for depth directly
+            ceres::Problem problem;
+            VectorXd z_value(num_constraints);
+
+            // initialize nx and ny
+            double mean_z_val = 0;
+            for (int j = 0; j < num_constraints; ++j) {
+              int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+
+              z_value(j) = zmaps[i].at<float>(r, c);
+              mean_z_val += z_value(j);
+            }
+            mean_z_val /= num_constraints;
+            cout << "mean z = " << mean_z_val << endl;
+
+            const double w_data = global_settings["depth"]["w_data"];
+            const double w_reg = global_settings["depth"]["w_reg"];
+            const double w_integrability = global_settings["depth"]["w_int"];
+            const double w_smoothness = global_settings["depth"]["w_smooth"];
+
+            PhGUtils::message("Assembling cost functions ...");
+            {
+              boost::timer::auto_cpu_timer timer_solve(
+                "[Shape from shading] Cost function assemble time = %w seconds.\n");
+
+              // data term
+              double mean_dz_val = 0; int mean_dz_count = 0;
+              for(int j = 0; j < num_constraints; ++j) {
+                int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+                int pidx = r * num_cols + c;
+                if(c < 1 || r < 1 || c >= num_cols || r >= num_rows) continue;
+
+                int left_idx = pidx - 1;
+                int right_idx = pidx + 1;
+                int up_idx = pidx - num_cols;
+                int down_idx = pidx + num_cols;
+
+                if(is_valid_pixel[left_idx] && is_valid_pixel[up_idx]) {
+                  mean_dz_val += fabs(z_value(j) - z_value(pixel_index_map[left_idx]));
+                  mean_dz_val += fabs(z_value(j) - z_value(pixel_index_map[up_idx]));
+                  ++mean_dz_count;
+
+                  cv::Vec3d depth_ij = depth_maps[i].at<cv::Vec3d>(r, c);
+                  cv::Vec3d depth_ij_l = depth_maps[i].at<cv::Vec3d>(r, c-1);
+                  cv::Vec3d depth_ij_u = depth_maps[i].at<cv::Vec3d>(r-1, c);
+                  double dx = -fabs(depth_ij[0] - depth_ij_l[0]);
+                  double dy = -fabs(depth_ij_u[1] - depth_ij[1]);
+
+                  ceres::DynamicNumericDiffCostFunction<DepthMapDataTerm> *cost_function =
+                    new ceres::DynamicNumericDiffCostFunction<DepthMapDataTerm>(
+                      new DepthMapDataTerm(
+                        pixels_i(j, 0), pixels_i(j, 1), pixels_i(j, 2),
+                        albedos_i(j, 0), albedos_i(j, 1), albedos_i(j, 2),
+                        lighting_coeffs[i], dx, dy)
+                    );
+                  cost_function->AddParameterBlock(1);
+                  cost_function->AddParameterBlock(1);
+                  cost_function->AddParameterBlock(1);
+                  cost_function->SetNumResiduals(3);
+                  problem.AddResidualBlock(cost_function, NULL,
+                                           z_value.data()+j,
+                                           z_value.data()+pixel_index_map[left_idx],
+                                           z_value.data()+pixel_index_map[up_idx]);
+                }
+              }
+
+              mean_dz_val /= mean_dz_count;
+              cout << "mean dz = " << mean_dz_val << endl;
+
+              // integrability term
+              for(int j = 0; j < num_constraints; ++j) {
+                int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+                int pidx = r * num_cols + c;
+                if(c < 1 || r < 1 || c >= num_cols || r >= num_rows) continue;
+
+                int left_idx = pidx - 1;
+                int right_idx = pidx + 1;
+                int up_idx = pidx - num_cols;
+                int down_idx = pidx + num_cols;
+                int up_left_idx = pidx - num_cols - 1;
+                int up_up_idx = pidx - num_cols - num_cols;
+                int left_left_idx = pidx - 2;
+
+                if(is_valid_pixel[left_idx] && is_valid_pixel[up_idx]
+                   && is_valid_pixel[up_left_idx]
+                   && is_valid_pixel[up_up_idx] && is_valid_pixel[left_left_idx]) {
+
+                  cv::Vec3d depth_ij = depth_maps[i].at<cv::Vec3d>(r, c);
+                  cv::Vec3d depth_ij_l = depth_maps[i].at<cv::Vec3d>(r, c-1);
+                  cv::Vec3d depth_ij_u = depth_maps[i].at<cv::Vec3d>(r-1, c);
+                  double dx = -fabs(depth_ij[0] - depth_ij_l[0]);
+                  double dy = -fabs(depth_ij_u[1] - depth_ij[1]);
+
+                  bool boundary_pixel = is_boundary[pidx];
+
+                  ceres::DynamicNumericDiffCostFunction<DepthMapIntegrabilityTerm>
+                    *cost_function =
+                      new ceres::DynamicNumericDiffCostFunction<DepthMapIntegrabilityTerm>(
+                        new DepthMapIntegrabilityTerm(dx, dy, boundary_pixel?0:w_integrability));
+                  cost_function->AddParameterBlock(1);
+                  cost_function->AddParameterBlock(1);
+                  cost_function->AddParameterBlock(1);
+                  cost_function->AddParameterBlock(1);
+                  cost_function->AddParameterBlock(1);
+                  cost_function->AddParameterBlock(1);
+                  cost_function->SetNumResiduals(1);
+
+                  problem.AddResidualBlock(cost_function, NULL,
+                                           z_value.data()+j,
+                                           z_value.data()+pixel_index_map[left_idx],
+                                           z_value.data()+pixel_index_map[up_idx],
+                                           z_value.data()+pixel_index_map[up_left_idx],
+                                           z_value.data()+pixel_index_map[up_up_idx],
+                                           z_value.data()+pixel_index_map[left_left_idx]);
+                }
+              }
+
+              // regularization term
+              for(int j = 0; j < num_constraints; ++j) {
+                int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+                int pidx = r * num_cols + c;
+
+                vector<pair<int, double>> reginfo;
+                for(auto p : LoG_coeffs_perpixel[pidx]) {
+                  if(is_valid_pixel[p.first]) reginfo.push_back(p);
+                }
+                if(reginfo.empty()) continue;
+                else {
+                  double z_LoG_j = normal_map_ref_LoG_i(pidx);
+
+                  ceres::DynamicNumericDiffCostFunction<DepthMapRegularizationTerm> *cost_function =
+                    new ceres::DynamicNumericDiffCostFunction<DepthMapRegularizationTerm>(
+                      new DepthMapRegularizationTerm(reginfo, z_LoG_j, w_reg)
+                    );
+
+                  cost_function->SetNumResiduals(1);
+                  for(auto ri : reginfo) {
+                    cost_function->AddParameterBlock(1);
+                  }
+
+                  vector<double*> params_ptrs;
+                  for(auto ri : reginfo) {
+                    params_ptrs.push_back(z_value.data()+pixel_index_map[ri.first]);
+                  }
+                  problem.AddResidualBlock(cost_function, NULL, params_ptrs);
+                }
+              }
+          }
+          PhGUtils::message("done.");
+
+          PhGUtils::message("Solving non-linear least squares ...");
+          {
+            boost::timer::auto_cpu_timer timer_solve(
+              "[Shape from shading] Problem solve time = %w seconds.\n");
+            ceres::Solver::Options options;
+            options.max_num_iterations = global_settings["depth"]["optimization"]["max_iters"];
+            options.num_threads = 8;
+            options.num_linear_solver_threads = 8;
+
+            options.initial_trust_region_radius = global_settings["depth"]["optimization"]["init_tr_radius"];
+
+            //options.min_trust_region_radius = 1.0;
+            //options.max_trust_region_radius = 1.0;
+
+            options.min_lm_diagonal = 1.0;
+            options.max_lm_diagonal = 1.0;
+
+            options.minimizer_progress_to_stdout = true;
+            ceres::Solver::Summary summary;
+            Solve(options, &problem, &summary);
+            cout << summary.BriefReport() << endl;
+          }
+
+          // update normal map
+          for(int j=0;j<num_constraints;++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+            zmaps[i].at<float>(r, c) = z_value(j);
+          }
+
+          for(int j=0;j<num_constraints;++j) {
+            int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+            int pidx = r * num_cols + c;
+            if (is_valid_pixel[pidx-1] && is_valid_pixel[pidx-num_cols]) {
+
+              cv::Vec3d depth_ij = depth_maps[i].at<cv::Vec3d>(r, c);
+              cv::Vec3d depth_ij_l = depth_maps[i].at<cv::Vec3d>(r, c-1);
+              cv::Vec3d depth_ij_u = depth_maps[i].at<cv::Vec3d>(r-1, c);
+              double dx = -fabs(depth_ij[0] - depth_ij_l[0]);
+              double dy = -fabs(depth_ij_u[1] - depth_ij[1]);
+
+              double p = (zmaps[i].at<float>(r, c) - zmaps[i].at<float>(r, c-1)) / dx;
+              double q = (zmaps[i].at<float>(r-1, c) - zmaps[i].at<float>(r, c)) / dy;
+
+              double N = p * p + q * q + 1;
+              normal_maps[i].at<cv::Vec3d>(r, c) = cv::Vec3d(p/N, q/N, 1/N);
+            }
+          }
+        }
+#endif  // USE_THETA_PHI
 
           PhGUtils::message("done.");
 

@@ -20,6 +20,12 @@
 
 #include "defs.h"
 
+#include "boost/filesystem/operations.hpp"
+#include "boost/filesystem/path.hpp"
+#include <boost/timer/timer.hpp>
+
+namespace fs = boost::filesystem;
+
 template <typename T>
 pair<T, T> normal2sphericalcoords(T nx, T ny, T nz) {
   // nx = sin(theta) * sin(phi)
@@ -447,6 +453,166 @@ inline pair<QImage, vector<vector<PixelInfo>>> GetPixelCoordinatesMap(
   }
 
   return make_pair(pixel_map_image, albedo_pixel_map);
+}
+
+inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
+  const vector<ImageBundle> image_bundles,
+  MultilinearModel& model,
+  BasicMesh& mesh,
+  int tex_size,
+  vector<vector<PixelInfo>>& albedo_pixel_map,
+  vector<vector<glm::dvec3>>& mean_texture,
+  vector<vector<double>>& mean_texture_weight,
+  cv::Mat& mean_texture_mat,
+  const string& mean_albedo_filename,
+  const fs::path& results_path,
+  bool generate_mean_texture=true) {
+  QImage mean_texture_image;
+  vector<vector<int>> face_indices_maps;
+  {
+    for(auto& bundle : image_bundles) {
+      // get the geometry of the mesh, update normal
+      model.ApplyWeights(bundle.params.params_model.Wid, bundle.params.params_model.Wexp);
+      mesh.UpdateVertices(model.GetTM());
+      mesh.ComputeNormals();
+
+      // for each image bundle, render the mesh to FBO with culling to get the visible triangles
+      OffscreenMeshVisualizer visualizer(bundle.image.width(), bundle.image.height());
+      visualizer.SetMVPMode(OffscreenMeshVisualizer::CamPerspective);
+      visualizer.SetRenderMode(OffscreenMeshVisualizer::Mesh);
+      visualizer.BindMesh(mesh);
+      visualizer.SetCameraParameters(bundle.params.params_cam);
+      visualizer.SetMeshRotationTranslation(bundle.params.params_model.R, bundle.params.params_model.T);
+      visualizer.SetIndexEncoded(true);
+      visualizer.SetEnableLighting(false);
+      QImage img = visualizer.Render();
+      img.save("mesh.png");
+
+      // find the visible triangles from the index map
+      auto triangles_indices_pair = FindTrianglesIndices(img);
+      set<int> triangles = triangles_indices_pair.first;
+      face_indices_maps.push_back(triangles_indices_pair.second);
+      cerr << triangles.size() << endl;
+
+      // get the projection parameters
+      glm::dmat4 Rmat = glm::eulerAngleYXZ(bundle.params.params_model.R[0], bundle.params.params_model.R[1],
+                                           bundle.params.params_model.R[2]);
+      glm::dmat4 Tmat = glm::translate(glm::dmat4(1.0),
+                                       glm::dvec3(bundle.params.params_model.T[0],
+                                                  bundle.params.params_model.T[1],
+                                                  bundle.params.params_model.T[2]));
+      glm::dmat4 Mview = Tmat * Rmat;
+
+      // for each visible triangle, compute the coordinates of its 3 corners
+      QImage img_vertices = img;
+      vector<vector<glm::dvec3>> triangles_projected;
+      for(auto tidx : triangles) {
+        auto face_i = mesh.face(tidx);
+        auto v0_mesh = mesh.vertex(face_i[0]);
+        auto v1_mesh = mesh.vertex(face_i[1]);
+        auto v2_mesh = mesh.vertex(face_i[2]);
+        glm::dvec3 v0_tri = ProjectPoint(glm::dvec3(v0_mesh[0], v0_mesh[1], v0_mesh[2]), Mview, bundle.params.params_cam);
+        glm::dvec3 v1_tri = ProjectPoint(glm::dvec3(v1_mesh[0], v1_mesh[1], v1_mesh[2]), Mview, bundle.params.params_cam);
+        glm::dvec3 v2_tri = ProjectPoint(glm::dvec3(v2_mesh[0], v2_mesh[1], v2_mesh[2]), Mview, bundle.params.params_cam);
+        triangles_projected.push_back(vector<glm::dvec3>{v0_tri, v1_tri, v2_tri});
+
+
+        img_vertices.setPixel(v0_tri.x, img.height()-1-v0_tri.y, qRgb(255, 255, 255));
+        img_vertices.setPixel(v1_tri.x, img.height()-1-v1_tri.y, qRgb(255, 255, 255));
+        img_vertices.setPixel(v2_tri.x, img.height()-1-v2_tri.y, qRgb(255, 255, 255));
+      }
+      img_vertices.save("mesh_with_vertices.png");
+
+      if(generate_mean_texture) {
+        // for each pixel in the texture map, use backward projection to obtain pixel value in the input image
+        // accumulate the texels in average texel map
+        for(int i=0;i<tex_size;++i) {
+          for(int j=0;j<tex_size;++j) {
+            PixelInfo pix_ij = albedo_pixel_map[i][j];
+
+            // skip if the triangle is not visible
+            if(triangles.find(pix_ij.fidx) == triangles.end()) continue;
+
+            auto face_i = mesh.face(pix_ij.fidx);
+
+            auto v0_mesh = mesh.vertex(face_i[0]);
+            auto v1_mesh = mesh.vertex(face_i[1]);
+            auto v2_mesh = mesh.vertex(face_i[2]);
+
+            auto v = v0_mesh * pix_ij.bcoords.x + v1_mesh * pix_ij.bcoords.y + v2_mesh * pix_ij.bcoords.z;
+
+            glm::dvec3 v_img = ProjectPoint(glm::dvec3(v[0], v[1], v[2]), Mview, bundle.params.params_cam);
+
+            // take the pixel from the input image through bilinear sampling
+            glm::dvec3 texel = bilinear_sample(bundle.image, v_img.x, bundle.image.height()-1-v_img.y);
+
+            if(texel.r < 0 && texel.g < 0 && texel.b < 0) continue;
+
+            mean_texture[i][j] += texel;
+            mean_texture_weight[i][j] += 1.0;
+          }
+        }
+      }
+    }
+
+    // [Optional]: render the mesh with texture to verify the texel values
+    if(generate_mean_texture) {
+      mean_texture_image = QImage(tex_size, tex_size, QImage::Format_ARGB32);
+      mean_texture_image.fill(0);
+      for(int i=0;i<tex_size;++i) {
+        for (int j = 0; j < (tex_size/2); ++j) {
+          double weight_ij = mean_texture_weight[i][j];
+          double weight_ij_s = mean_texture_weight[i][tex_size-1-j];
+
+          if(weight_ij == 0 && weight_ij_s == 0) {
+            mean_texture_mat.at<cv::Vec3d>(i, j) = cv::Vec3d(0, 0, 0);
+            continue;
+          } else {
+            glm::dvec3 texel = (mean_texture[i][j] + mean_texture[i][tex_size-1-j]) / (weight_ij + weight_ij_s);
+            mean_texture[i][j] = texel;
+            mean_texture[i][tex_size-1-j] = texel;
+            mean_texture_image.setPixel(j, i, qRgb(texel.r, texel.g, texel.b));
+            mean_texture_image.setPixel(tex_size-1-j, i, qRgb(texel.r, texel.g, texel.b));
+
+            mean_texture_mat.at<cv::Vec3d>(i, j) = cv::Vec3d(texel.x, texel.y, texel.z);
+            mean_texture_mat.at<cv::Vec3d>(i, tex_size-1-j) = cv::Vec3d(texel.x, texel.y, texel.z);
+          }
+        }
+      }
+
+#define MEANSHIFT_CLUSTERING_MEAN_TEXTURE 0
+#if MEANSHIFT_CLUSTERING_MEAN_TEXTURE
+      cv::resize(mean_texture_mat, mean_texture_mat, cv::Size(), 0.25, 0.25);
+      cv::Mat mean_texture_refined_mat = mean_texture_mat;
+      mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_refined_mat, 5.0, 30.0, 0.5);
+      mean_texture_refined_mat = 0.25 * mean_texture_mat + 0.75 * mean_texture_refined_mat;
+      mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_refined_mat, 10.0, 30.0, 0.5);
+      mean_texture_refined_mat = 0.25 * mean_texture_mat + 0.75 * mean_texture_refined_mat;
+      mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_refined_mat, 20.0, 30.0, 0.5);
+      mean_texture_refined_mat = 0.25 * mean_texture_mat + 0.75 * mean_texture_refined_mat;
+      cv::resize(mean_texture_refined_mat, mean_texture_refined_mat, cv::Size(), 4.0, 4.0);
+#else
+      cv::Mat mean_texture_refined_mat = mean_texture_mat;
+#endif
+
+      QImage mean_texture_image_refined(tex_size, tex_size, QImage::Format_ARGB32);
+      for(int i=0;i<tex_size;++i) {
+        for(int j=0;j<tex_size;++j) {
+          cv::Vec3d pix = mean_texture_refined_mat.at<cv::Vec3d>(i, j);
+          mean_texture_image_refined.setPixel(j, i, qRgb(pix[0], pix[1], pix[2]));
+        }
+      }
+
+      mean_texture_image.save( (results_path / fs::path("mean_texture.png")).string().c_str() );
+      mean_texture_image_refined.save( (results_path / fs::path("mean_texture_refined.png")).string().c_str() );
+      mean_texture_image = mean_texture_image_refined;
+    } else {
+      mean_texture_image = QImage(mean_albedo_filename.c_str());
+      mean_texture_image.save( (results_path / fs::path("mean_texture.png")).string().c_str() );
+    }
+  }
+
+  return make_tuple(mean_texture_image, face_indices_maps);
 }
 
 #endif //FACESHAPEFROMSHADING_UTILS_H

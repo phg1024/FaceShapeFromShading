@@ -4,3 +4,6 @@
 [submodule "Catch"]
 	path = Catch
 	url = https://github.com/philsquared/Catch.git
+[submodule "json"]
+	path = json
+	url = ../../nlohmann/json.git
