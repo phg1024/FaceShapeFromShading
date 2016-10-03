@@ -1855,6 +1855,7 @@ int main(int argc, char **argv) {
 
       // Depth recovery
       {
+
         PhGUtils::message("[Shape from shading] Depth recovery.");
         const int num_cols = bundle.image.width(), num_rows = bundle.image.height();
 
@@ -1897,6 +1898,8 @@ int main(int argc, char **argv) {
           is_valid_pixel[pidx] = true;
           pixel_index_map[pidx] = j;
         }
+
+#if USE_THETA_PHI
 
 #define USE_IMAGE_GRID 0
 
@@ -2096,16 +2099,53 @@ int main(int argc, char **argv) {
           cv::Vec3d old_depth = depth_maps[i].at<cv::Vec3d>(r, c);
           float d_j = depth_map_final.at<float>(r, c);
 
-#if USE_IMAGE_GRID
+          #if USE_IMAGE_GRID
           depth_final.push_back(glm::vec3(c, r, d_j));
-#else
+          #else
           glm::dvec3 pt = glm::vec3(old_depth[0], old_depth[1], d_j);
           depth_final.push_back(pt);
 
           glm::dvec4 pt0 =  Rmat_inv * glm::dvec4(pt.x, pt.y, pt.z, 1.0);
           depth_final_raw.push_back(glm::dvec3(pt0.x, pt0.y, pt0.z));
-#endif
+          #endif
         }
+
+#else  // USE_THETA_PHI
+
+        glm::dmat4 Rmat = glm::eulerAngleYXZ(bundle.params.params_model.R[0],
+                                             bundle.params.params_model.R[1],
+                                             bundle.params.params_model.R[2]);
+        glm::dmat4 Rmat_inv = glm::eulerAngleZ(-bundle.params.params_model.R[2])
+                            * glm::eulerAngleX(-bundle.params.params_model.R[1])
+                            * glm::eulerAngleY(-bundle.params.params_model.R[0]);
+
+        glm::dmat4 Tmat = glm::translate(glm::dmat4(1.0),
+                                         glm::dvec3(bundle.params.params_model.T[0],
+                                                    bundle.params.params_model.T[1],
+                                                    bundle.params.params_model.T[2]));
+        glm::dmat4 Mview = Rmat;
+        glm::dmat4 Mview_inv = glm::inverse(Mview);
+
+        vector<glm::dvec3> depth_final;
+        vector<glm::dvec3> depth_final_raw;
+        for(int j=0;j<num_constraints;++j) {
+          int r = pixel_indices_i[j].x, c = pixel_indices_i[j].y;
+          cv::Vec3d old_depth = depth_maps[i].at<cv::Vec3d>(r, c);
+
+          float d_j = zmaps[i].at<float>(r, c);
+
+          #if USE_IMAGE_GRID
+          depth_final.push_back(glm::vec3(c, r, d_j));
+          #else
+          glm::dvec3 pt = glm::vec3(old_depth[0], old_depth[1], d_j);
+          depth_final.push_back(pt);
+
+          glm::dvec4 pt0 =  Rmat_inv * glm::dvec4(pt.x, pt.y, pt.z, 1.0);
+          depth_final_raw.push_back(glm::dvec3(pt0.x, pt0.y, pt0.z));
+          #endif
+        }
+
+#endif
 
         // write out the new depth map
         {
