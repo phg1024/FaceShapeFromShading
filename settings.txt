@@ -1,5 +1,6 @@
 {
   "max_iters": 3,
+  "preparation_only": true,
   "albedo": {
     "lambda": 256.0
   },
@@ -22,7 +23,7 @@
     "integrability_threshold": 64.0,
     "optimization": {
       "max_iters": 10,
-      "init_tr_radius": 0.1
+      "init_tr_radius": 0.01
     }
   }
 }
