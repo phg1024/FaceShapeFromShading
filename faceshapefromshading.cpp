@@ -233,6 +233,7 @@ int main(int argc, char **argv) {
       zmaps[i] = cv::Mat(img.height(), img.width(), CV_32F);
       QImage depth_img = img;
       vector<glm::dvec3> point_cloud;
+      vector<glm::dvec4> point_cloud_with_id;
       vector<double> output_depth_map; output_depth_map.reserve(img.height()*img.width());
       //#pragma omp parallel for
       for(int y=0;y<img.height();++y) {
@@ -256,6 +257,7 @@ int main(int argc, char **argv) {
             glm::dvec3 XYZ = glm::unProject(glm::dvec3(x, img.height()-1-y, dvalue), Mview, Mproj, viewport);
             glm::dvec4 Rxyz = Rmat * glm::dvec4(XYZ.x, XYZ.y, XYZ.z, 1);
             point_cloud.push_back(glm::dvec3(Rxyz.x, Rxyz.y, Rxyz.z));
+            point_cloud_with_id.push_back(glm::dvec4(Rxyz.x, Rxyz.y, Rxyz.z, y*img.width()+x));
             depth_maps_ref[i].at<double>(y, x) = Rxyz.z;
             depth_maps[i].at<cv::Vec3d>(y, x) = cv::Vec3d(Rxyz.x, Rxyz.y, Rxyz.z);
             output_depth_map.push_back(Rxyz.x); output_depth_map.push_back(Rxyz.y); output_depth_map.push_back(Rxyz.z);
@@ -281,6 +283,38 @@ int main(int argc, char **argv) {
         int depth_map_size[] = {img.height(), img.width()};
         fout.write(reinterpret_cast<char*>(depth_map_size), sizeof(int)*2);
         fout.write(reinterpret_cast<char*>(output_depth_map.data()), sizeof(double)*img.height()*img.width()*3);
+        fout.close();
+      }
+
+      // Write out the depth map as a per-pixel mesh
+      {
+        ofstream fout((results_path / fs::path("depth_mesh" + std::to_string(i) + ".obj")).string());
+
+        vector<int> depth_node_map(img.width()*img.height(), 0);
+        for(int j=0;j<point_cloud_with_id.size();++j) {
+          auto& p = point_cloud_with_id[j];
+          fout << "v " << p.x << ' ' << p.y << ' ' << p.z << '\n';
+          depth_node_map[static_cast<int>(p.w)] = j + 1;
+        }
+
+        for(int j=0;j<point_cloud_with_id.size();++j) {
+          int idx = point_cloud_with_id[j].w;
+          int r = idx / img.width(), c = idx % img.width();
+          int lidx = idx - 1;
+          int ridx = idx + 1;
+          int uidx = idx - img.width();
+          int didx = idx + img.width();
+          if(ridx < img.width()*img.height() && didx < img.width()*img.height()) {
+            if(depth_node_map[ridx] > 0 && depth_node_map[didx] > 0) {
+              fout << "f " << depth_node_map[idx] << " " << depth_node_map[didx] << " " << depth_node_map[ridx] << '\n';
+            }
+          }
+          if(lidx >= 0 && uidx >= 0) {
+            if(depth_node_map[lidx] > 0 && depth_node_map[uidx] > 0) {
+              fout << "f " << depth_node_map[idx] << " " << depth_node_map[uidx] << " " << depth_node_map[lidx] << '\n';
+            }
+          }
+        }
         fout.close();
       }
 
