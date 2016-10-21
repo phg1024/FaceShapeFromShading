@@ -26,6 +26,9 @@
 
 namespace fs = boost::filesystem;
 
+#include "json/src/json.hpp"
+using json = nlohmann::json;
+
 template <typename T>
 pair<T, T> normal2sphericalcoords(T nx, T ny, T nz) {
   // nx = sin(theta) * sin(phi)
@@ -466,10 +469,16 @@ inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
   cv::Mat& mean_texture_mat,
   const string& mean_albedo_filename,
   const fs::path& results_path,
-  bool generate_mean_texture=true) {
+  const string& options) {
   QImage mean_texture_image;
   vector<vector<int>> face_indices_maps;
   {
+    json settings = json::parse(options);
+
+    cout << settings << endl;
+
+    bool generate_mean_texture = settings["generate_mean_texture"];
+
     for(auto& bundle : image_bundles) {
       // get the geometry of the mesh, update normal
       model.ApplyWeights(bundle.params.params_model.Wid, bundle.params.params_model.Wexp);
@@ -580,20 +589,64 @@ inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
         }
       }
 
-#define MEANSHIFT_CLUSTERING_MEAN_TEXTURE 0
-#if MEANSHIFT_CLUSTERING_MEAN_TEXTURE
-      cv::resize(mean_texture_mat, mean_texture_mat, cv::Size(), 0.25, 0.25);
+      string refine_method = settings["refine_method"];
+
       cv::Mat mean_texture_refined_mat = mean_texture_mat;
-      mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_refined_mat, 5.0, 30.0, 0.5);
-      mean_texture_refined_mat = 0.25 * mean_texture_mat + 0.75 * mean_texture_refined_mat;
-      mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_refined_mat, 10.0, 30.0, 0.5);
-      mean_texture_refined_mat = 0.25 * mean_texture_mat + 0.75 * mean_texture_refined_mat;
-      mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_refined_mat, 20.0, 30.0, 0.5);
-      mean_texture_refined_mat = 0.25 * mean_texture_mat + 0.75 * mean_texture_refined_mat;
-      cv::resize(mean_texture_refined_mat, mean_texture_refined_mat, cv::Size(), 4.0, 4.0);
-#else
-      cv::Mat mean_texture_refined_mat = mean_texture_mat;
-#endif
+      if(refine_method == "mean_shift") {
+        cv::resize(mean_texture_mat, mean_texture_mat, cv::Size(), 0.25, 0.25);
+        mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_refined_mat, 5.0, 30.0, 0.5);
+        mean_texture_refined_mat = 0.25 * mean_texture_mat + 0.75 * mean_texture_refined_mat;
+        mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_refined_mat, 10.0, 30.0, 0.5);
+        mean_texture_refined_mat = 0.25 * mean_texture_mat + 0.75 * mean_texture_refined_mat;
+        mean_texture_refined_mat = StatsUtils::MeanShiftSegmentation(mean_texture_refined_mat, 20.0, 30.0, 0.5);
+        mean_texture_refined_mat = 0.25 * mean_texture_mat + 0.75 * mean_texture_refined_mat;
+        cv::resize(mean_texture_refined_mat, mean_texture_refined_mat, cv::Size(), 4.0, 4.0);
+      } else if (refine_method == "hsv") {
+        cout << "Refine using hsv method ..." << endl;
+        // refine using core face region and clustering in hsv space
+        const string core_face_region_filename = settings["core_face_region_filename"];
+        auto core_face_region = cv::imread(core_face_region_filename.c_str(), CV_LOAD_IMAGE_GRAYSCALE);
+
+        vector<glm::ivec2> valid_pixels;
+        for(int i=0;i<core_face_region.rows;++i) {
+          for(int j=0;j<core_face_region.cols;++j) {
+            unsigned char c = core_face_region.at<unsigned char>(i, j);
+            if( c > 0 ) valid_pixels.push_back(glm::ivec2(i, j));
+          }
+        }
+        cout << "valid pixels = " << valid_pixels.size() << endl;
+
+        glm::dvec3 mean_color(0, 0, 0);
+        for(auto p : valid_pixels) {
+          cv::Vec3d pix = mean_texture_refined_mat.at<cv::Vec3d>(p.x, p.y);
+          mean_color.r += pix[0] / 255.0;
+          mean_color.g += pix[1] / 255.0;
+          mean_color.b += pix[2] / 255.0;
+        }
+        mean_color /= valid_pixels.size();
+        cv::Vec3d mean_color_vec(mean_color.r*255.0, mean_color.g*255.0, mean_color.b*255.0);
+
+        QColor mean_color_qt = QColor::fromRgbF(mean_color.r, mean_color.g, mean_color.b);
+        glm::dvec3 mean_hsv;
+        mean_color_qt.getHsvF(&mean_hsv.r, &mean_hsv.g, &mean_hsv.b);
+
+        const double distance_threshold = settings["hsv_threshold"];
+        // convert the entire image to hsv
+        for(int i=0;i<mean_texture_mat.rows;++i) {
+          for(int j=0;j<mean_texture_mat.cols;++j) {
+            cv::Vec3d pix = mean_texture_mat.at<cv::Vec3d>(i, j);
+            QColor pix_color = QColor::fromRgb(pix[0], pix[1], pix[2]);
+            glm::dvec3 pix_hsv;
+            pix_color.getHsvF(&pix_hsv.r, &pix_hsv.g, &pix_hsv.b);
+            double d_ij = glm::distance2(pix_hsv, mean_hsv);
+            if(d_ij < distance_threshold) {
+              mean_texture_refined_mat.at<cv::Vec3d>(i, j) = mean_color_vec * 0.75 + mean_texture_refined_mat.at<cv::Vec3d>(i, j) * 0.25;
+            }
+          }
+        }
+      } else {
+        // no refinement
+      }
 
       QImage mean_texture_image_refined(tex_size, tex_size, QImage::Format_ARGB32);
       for(int i=0;i<tex_size;++i) {

@@ -32,5 +32,6 @@ using namespace Eigen;
 
 #include "glm/glm.hpp"
 #include "gli/gli.hpp"
+#include "glm/gtx/norm.hpp"
 
 #endif //FACESHAPEFROMSHADING_COMMON_H_H

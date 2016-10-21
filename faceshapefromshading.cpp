@@ -60,6 +60,7 @@ int main(int argc, char **argv) {
   const string albedo_index_map_filename("/home/phg/Data/Multilinear/albedo_index.png");
   const string albedo_pixel_map_filename("/home/phg/Data/Multilinear/albedo_pixel.png");
   const string mean_albedo_filename("/home/phg/Data/Texture/mean_texture.png");
+  const string core_face_region_filename("/home/phg/Data/Multilinear/albedos/core_face.png");
 
   const string valid_faces_indices_filename("/home/phg/Data/Multilinear/face_region_indices.txt");
   const string face_boundary_indices_filename("/home/phg/Data/Multilinear/face_boundary_indices.txt");
@@ -127,7 +128,7 @@ int main(int argc, char **argv) {
     fs::path res_filename = settings_filepath.parent_path() / fs::path(p.first + ".res");
     cout << "[" << image_filename << ", " << pts_filename << "]" << endl;
 
-    auto image_points_pair = LoadImageAndPoints(image_filename.string(), pts_filename.string());
+    auto image_points_pair = LoadImageAndPoints(image_filename.string(), pts_filename.string(), false);
     auto recon_results = LoadReconstructionResult(res_filename.string());
     image_bundles.push_back(ImageBundle(image_points_pair.first, image_points_pair.second, recon_results));
   }
@@ -142,6 +143,15 @@ int main(int argc, char **argv) {
   // Collect texture information from each input (image, mesh) pair to obtain mean texture
   QImage mean_texture_image;
   vector<vector<int>> face_indices_maps;
+  json mean_texture_options = R"(
+    {
+      "generate_mean_texture": true,
+      "refine_method": "hsv",
+      "hsv_threshold": 0.1
+    }
+  )"_json;
+  mean_texture_options["core_face_region_filename"] = core_face_region_filename;
+
   tie(mean_texture_image, face_indices_maps) = GenerateMeanTexture(
     image_bundles,
     model,
@@ -153,7 +163,7 @@ int main(int argc, char **argv) {
     mean_texture_mat,
     mean_albedo_filename,
     results_path,
-    true
+    mean_texture_options.dump()
   );
 
 
