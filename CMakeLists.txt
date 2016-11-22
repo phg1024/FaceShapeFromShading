@@ -91,6 +91,18 @@ target_link_libraries(FaceShapeFromShading
                       ${MKLLIBS}
                       ${PhGLib})
 
+# Face shape from shading using blendshapes program
+add_executable(FaceShapeFromShading_exp faceshapefromshading_exp.cpp common.h MultilinearReconstruction/OffscreenMeshVisualizer.cpp MultilinearReconstruction/OffscreenMeshVisualizer.h utils.h)
+target_link_libraries(FaceShapeFromShading_exp
+                      multilinearmodel
+                      basicmesh
+                      tensor
+                      ioutilities
+                      Qt5::Core
+                      Qt5::Widgets
+                      Qt5::OpenGL
+                      ${MKLLIBS}
+                      ${PhGLib})
 add_executable(ptrender ptrender.cpp)
 
 add_executable(explicit explicit.cpp)
