@@ -458,9 +458,25 @@ inline pair<QImage, vector<vector<PixelInfo>>> GetPixelCoordinatesMap(
   return make_pair(pixel_map_image, albedo_pixel_map);
 }
 
+inline void ApplyWeights(
+  BasicMesh& mesh,
+  const vector<BasicMesh>& blendshapes,
+  const VectorXd& weights
+) {
+  const int num_blendshapes = 46;
+  MatrixX3d verts0 = blendshapes[0].vertices();
+  MatrixX3d verts = verts0;
+  for(int j=1;j<=num_blendshapes;++j) {
+    verts += (blendshapes[j].vertices() - verts0) * weights(j);
+  }
+  mesh.vertices() = verts;
+  mesh.ComputeNormals();
+}
+
 inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
   const vector<ImageBundle> image_bundles,
   MultilinearModel& model,
+  const vector<BasicMesh>& blendshapes,
   BasicMesh& mesh,
   int tex_size,
   vector<vector<PixelInfo>>& albedo_pixel_map,
@@ -478,12 +494,17 @@ inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
     cout << settings << endl;
 
     bool generate_mean_texture = settings["generate_mean_texture"];
+    bool use_blendshapes = settings["use_blendshapes"];
 
     for(auto& bundle : image_bundles) {
       // get the geometry of the mesh, update normal
-      model.ApplyWeights(bundle.params.params_model.Wid, bundle.params.params_model.Wexp);
-      mesh.UpdateVertices(model.GetTM());
-      mesh.ComputeNormals();
+      if(use_blendshapes) {
+        ApplyWeights(mesh, blendshapes, bundle.params.params_model.Wexp_FACS);
+      } else {
+        model.ApplyWeights(bundle.params.params_model.Wid, bundle.params.params_model.Wexp);
+        mesh.UpdateVertices(model.GetTM());
+        mesh.ComputeNormals();
+      }
 
       // for each image bundle, render the mesh to FBO with culling to get the visible triangles
       OffscreenMeshVisualizer visualizer(bundle.image.width(), bundle.image.height());

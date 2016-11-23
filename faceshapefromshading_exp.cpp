@@ -28,9 +28,11 @@
 
 #include <boost/filesystem/operations.hpp>
 #include <boost/filesystem/path.hpp>
+#include <boost/program_options.hpp>
 #include <boost/timer/timer.hpp>
 
 namespace fs = boost::filesystem;
+namespace po = boost::program_options;
 
 #include "json/src/json.hpp"
 using json = nlohmann::json;
@@ -39,7 +41,34 @@ using json = nlohmann::json;
 #include "defs.h"
 #include "utils.h"
 
+po::variables_map ParseCommandlineOptions(int argc, char** argv) {
+  po::options_description desc("Options");
+  desc.add_options()
+    ("help", "Print help messages")
+    ("settings_file", po::value<string>()->required(), "Settings file.")
+    ("blendshapes_path", po::value<string>()->required(), "Input blendshapes path.")
+    ("init_recon_path", po::value<string>()->required(), "Initial reconstructions path.")
+    ("iter", po::value<int>()->required(), "The iteration number.");
+  po::variables_map vm;
+
+  try {
+    po::store(po::parse_command_line(argc, argv, desc), vm);
+    po::notify(vm);
+    if(vm.count("help")) {
+      cout << desc << endl;
+      exit(1);
+    }
+    return vm;
+  } catch(po::error& e) {
+    cerr << "Error: " << e.what() << endl;
+    cerr << desc << endl;
+    exit(1);
+  }
+}
+
 int main(int argc, char **argv) {
+  po::variables_map vm = ParseCommandlineOptions(argc, argv);
+
   QApplication a(argc, argv);
   glutInit(&argc, argv);
 
@@ -113,14 +142,17 @@ int main(int argc, char **argv) {
   tie(pixel_map_image, albedo_pixel_map) = GetPixelCoordinatesMap(albedo_pixel_map_filename,
                                                                   albedo_index_map, mesh);
 
-  const string settings_filename(argv[1]);
+  const string settings_filename = vm["settings_file"].as<string>();
+  int iteration_index = vm["iter"].as<int>();
+  const string recon_path = vm["init_recon_path"].as<string>();
+  const string blendshapes_path = vm["blendshapes_path"].as<string>();
 
   // Parse the setting file and load image related resources
   fs::path settings_filepath(settings_filename);
 
   // Create SFS results directory
   fs::path image_files_path = settings_filepath.parent_path();
-  fs::path results_path = image_files_path / fs::path("SFS");
+  fs::path results_path = image_files_path / fs::path("iteration_" + to_string(iteration_index)) / fs::path("SFS");
   fs::create_directories(results_path);
 
   // Load the settings file
@@ -133,7 +165,7 @@ int main(int argc, char **argv) {
   for(auto& p : image_points_filenames) {
     fs::path image_filename = settings_filepath.parent_path() / fs::path(p.first);
     fs::path pts_filename = settings_filepath.parent_path() / fs::path(p.second);
-    fs::path res_filename = settings_filepath.parent_path() / fs::path(p.first + ".res");
+    fs::path res_filename = fs::path(recon_path) / fs::path(p.first + ".res");
     cout << "[" << image_filename << ", " << pts_filename << "]" << endl;
 
     auto image_points_pair = LoadImageAndPoints(image_filename.string(), pts_filename.string(), false);
@@ -141,6 +173,14 @@ int main(int argc, char **argv) {
     image_bundles.push_back(ImageBundle(image_points_pair.first, image_points_pair.second, recon_results));
   }
   cout << "Image bundles loaded." << endl;
+
+  // Load all the input blendshapes
+  const int num_blendshapes = 46;
+  vector<BasicMesh> blendshapes(num_blendshapes+1);
+  for(int i=0;i<=num_blendshapes;++i) {
+    blendshapes[i].LoadOBJMesh( blendshapes_path + "/" + "B_" + to_string(i) + ".obj" );
+    blendshapes[i].ComputeNormals();
+  }
 
   MultilinearModel model(model_filename);
 
@@ -155,7 +195,8 @@ int main(int argc, char **argv) {
     {
       "generate_mean_texture": true,
       "refine_method": "hsv",
-      "hsv_threshold": 0.1
+      "hsv_threshold": 0.1,
+      "use_blendshapes": true
     }
   )"_json;
   mean_texture_options["core_face_region_filename"] = core_face_region_filename;
@@ -163,6 +204,7 @@ int main(int argc, char **argv) {
   tie(mean_texture_image, face_indices_maps) = GenerateMeanTexture(
     image_bundles,
     model,
+    blendshapes,
     mesh,
     tex_size,
     albedo_pixel_map,
@@ -201,9 +243,12 @@ int main(int argc, char **argv) {
     for(int i=0;i<num_images;++i) {
       auto& bundle = image_bundles[i];
       // get the geometry of the mesh, update normal
+      /*
       model.ApplyWeights(bundle.params.params_model.Wid, bundle.params.params_model.Wexp);
       mesh.UpdateVertices(model.GetTM());
       mesh.ComputeNormals();
+      */
+      ApplyWeights(mesh, blendshapes, bundle.params.params_model.Wexp_FACS);
 
       // for each image bundle, render the mesh to FBO with culling to get the visible triangles
       OffscreenMeshVisualizer visualizer(bundle.image.width(), bundle.image.height());
@@ -354,9 +399,12 @@ int main(int argc, char **argv) {
       auto& bundle = image_bundles[i];
 
       // get the geometry of the mesh, update normal
+      /*
       model.ApplyWeights(bundle.params.params_model.Wid, bundle.params.params_model.Wexp);
       mesh.UpdateVertices(model.GetTM());
       mesh.ComputeNormals();
+      */
+      ApplyWeights(mesh, blendshapes, bundle.params.params_model.Wexp_FACS);
 
       // for each image bundle, render the mesh to FBO with culling to get the visible triangles
       OffscreenMeshVisualizer visualizer(bundle.image.width(), bundle.image.height());

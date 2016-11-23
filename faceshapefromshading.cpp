@@ -147,7 +147,8 @@ int main(int argc, char **argv) {
     {
       "generate_mean_texture": true,
       "refine_method": "hsv",
-      "hsv_threshold": 0.1
+      "hsv_threshold": 0.1,
+      "use_blendshapes": false
     }
   )"_json;
   mean_texture_options["core_face_region_filename"] = core_face_region_filename;
@@ -155,6 +156,7 @@ int main(int argc, char **argv) {
   tie(mean_texture_image, face_indices_maps) = GenerateMeanTexture(
     image_bundles,
     model,
+    vector<BasicMesh>(),
     mesh,
     tex_size,
     albedo_pixel_map,
