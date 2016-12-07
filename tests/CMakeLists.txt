@@ -41,7 +41,7 @@ if (GLEW_FOUND)
 endif()
 
 # Eigen
-set(EIGEN_INCLUDE_DIR /usr/include/eigen3)
+find_package(Eigen)
 include_directories(${EIGEN_INCLUDE_DIR})
 
 # MKL
@@ -64,9 +64,9 @@ find_package(Qt5Widgets)
 find_package(Qt5OpenGL)
 
 # Ceres solver
-find_package(Ceres REQUIRED)
-include_directories(${CERES_INCLUDE_DIRS})
-link_libraries(${CERES_LIBRARIES})
+#find_package(Ceres REQUIRED)
+#include_directories(${CERES_INCLUDE_DIRS})
+#link_libraries(${CERES_LIBRARIES})
 
 # Face shape from shading program
 add_executable(test_fbo test_fbo.cpp)

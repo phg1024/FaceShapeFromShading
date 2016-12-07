@@ -8,6 +8,7 @@
 
 #include <QFile>
 #include <QImage>
+#include <QColor>
 
 #include <MultilinearReconstruction/basicmesh.h>
 #include <MultilinearReconstruction/costfunctions.h>

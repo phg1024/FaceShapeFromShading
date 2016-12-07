@@ -365,7 +365,7 @@ int main(int argc, char **argv) {
       QImage albedo_image = visualizer.Render(true);
 
       albedos_ref[i] = cv::Mat(bundle.image.height(), bundle.image.width(), CV_64FC3);
-      #pragma omp parallel for
+      //#pragma omp parallel for
       for(int y=0;y<albedo_image.height();++y) {
         for(int x=0;x<albedo_image.width();++x) {
 
@@ -387,7 +387,7 @@ int main(int argc, char **argv) {
 
       albedo_image.save( (results_path / fs::path("albedo_transferred_" + std::to_string(i) + ".png")).string().c_str() );
 
-      #pragma omp parallel for
+      //#pragma omp parallel for
       for(int y=0;y<albedo_image.height();++y) {
         for(int x=0;x<albedo_image.width();++x) {
           QRgb pix = albedo_image.pixel(x, y);
@@ -1633,7 +1633,7 @@ int main(int argc, char **argv) {
 
             options.minimizer_progress_to_stdout = true;
             ceres::Solver::Summary summary;
-            Solve(options, &problem, &summary);
+            ceres::Solve(options, &problem, &summary);
             cout << summary.BriefReport() << endl;
           }
 
