@@ -48,7 +48,9 @@ po::variables_map ParseCommandlineOptions(int argc, char** argv) {
     ("settings_file", po::value<string>()->required(), "Settings file.")
     ("blendshapes_path", po::value<string>()->required(), "Input blendshapes path.")
     ("init_recon_path", po::value<string>()->required(), "Initial reconstructions path.")
-    ("iter", po::value<int>()->required(), "The iteration number.");
+    ("iter", po::value<int>()->required(), "The iteration number.")
+    ("subdivision", "Whether the input blendshapes are subdivided or not.")
+    ("subdivision_depth", po::value<int>(), "The depth of subdivision.");
   po::variables_map vm;
 
   try {
@@ -133,29 +135,31 @@ int main(int argc, char **argv) {
 
   const int tex_size = 2048;
 
-  // HACK: subdivie the template mesh so it has the same topology as the input
-  // blendshapes
-  // Subdivide the mesh twice
-  const int max_subdivisions = 1;
-  for(int i=0;i<max_subdivisions;++i) {
-    mesh.BuildHalfEdgeMesh();
-    cout << "Subdivision #" << i << endl;
-    mesh.Subdivide();
-    cout << "#faces = " << mesh.NumFaces() << endl;
-  }
+  if(vm.count("subdivision")) {
 
-  // HACK: each valid face i becomes [4i, 4i+1, 4i+2, 4i+3] after the each
-  // subdivision. See BasicMesh::Subdivide for details
-  for(int i=0;i<max_subdivisions;++i) {
-    vector<int> valid_faces_indices_new;
-    for(auto fidx : valid_faces_indices) {
-      int fidx_base = fidx*4;
-      valid_faces_indices_new.push_back(fidx_base);
-      valid_faces_indices_new.push_back(fidx_base+1);
-      valid_faces_indices_new.push_back(fidx_base+2);
-      valid_faces_indices_new.push_back(fidx_base+3);
+    // HACK: subdivie the template mesh so it has the same topology as the input
+    // blendshapes
+    const int max_subdivisions = vm["subdivision_depth"].as<int>();
+    for(int i=0;i<max_subdivisions;++i) {
+      mesh.BuildHalfEdgeMesh();
+      cout << "Subdivision #" << i << endl;
+      mesh.Subdivide();
+      cout << "#faces = " << mesh.NumFaces() << endl;
     }
-    valid_faces_indices = valid_faces_indices_new;
+
+    // HACK: each valid face i becomes [4i, 4i+1, 4i+2, 4i+3] after the each
+    // subdivision. See BasicMesh::Subdivide for details
+    for(int i=0;i<max_subdivisions;++i) {
+      vector<int> valid_faces_indices_new;
+      for(auto fidx : valid_faces_indices) {
+        int fidx_base = fidx*4;
+        valid_faces_indices_new.push_back(fidx_base);
+        valid_faces_indices_new.push_back(fidx_base+1);
+        valid_faces_indices_new.push_back(fidx_base+2);
+        valid_faces_indices_new.push_back(fidx_base+3);
+      }
+      valid_faces_indices = valid_faces_indices_new;
+    }
   }
 
   // Generate index map for albedo
