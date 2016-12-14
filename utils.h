@@ -360,8 +360,8 @@ static QImage TransferColor(const QImage& source, const QImage& target,
 
 inline QImage GetIndexMap(const string& albedo_index_map_filename,
                    const BasicMesh& mesh,
-                   bool generate_index_map = true) {
-  const int tex_size = 2048;
+                   bool generate_index_map = true,
+                   int tex_size = 2048) {
   QImage albedo_index_map;
   if(QFile::exists(albedo_index_map_filename.c_str()) && (!generate_index_map)) {
     PhGUtils::message("loading index map for albedo.");
@@ -383,9 +383,8 @@ inline pair<QImage, vector<vector<PixelInfo>>> GetPixelCoordinatesMap(
   const string& albedo_pixel_map_filename,
   const QImage& albedo_index_map,
   const BasicMesh& mesh,
-  bool gen_pixel_map = false) {
-
-  const int tex_size = 2048;
+  bool gen_pixel_map = false,
+  int tex_size = 2048) {
 
   vector<vector<PixelInfo>> albedo_pixel_map(tex_size, vector<PixelInfo>(tex_size));
 
@@ -451,8 +450,8 @@ inline pair<QImage, vector<vector<PixelInfo>>> GetPixelCoordinatesMap(
 
         pixel_map_image.setPixel(j, i, qRgb(bcoords.x*255, bcoords.y*255, bcoords.z*255));
       }
-      pixel_map_image.save("albedo_pixel.jpg");
     }
+    pixel_map_image.save("albedo_pixel.jpg");
     PhGUtils::message("done.");
   }
 
@@ -497,6 +496,11 @@ inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
     bool generate_mean_texture = settings["generate_mean_texture"];
     bool use_blendshapes = settings["use_blendshapes"];
 
+    // use a larger scale when generating mean texture with blendshapes
+    // since blendshapes are subdivided meshes and each triangle is much smaller
+    double scale_factor = 1.0;
+    if(use_blendshapes) scale_factor = 2.0;
+
     for(auto& bundle : image_bundles) {
       // get the geometry of the mesh, update normal
       if(use_blendshapes) {
@@ -508,7 +512,7 @@ inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
       }
 
       // for each image bundle, render the mesh to FBO with culling to get the visible triangles
-      OffscreenMeshVisualizer visualizer(bundle.image.width(), bundle.image.height());
+      OffscreenMeshVisualizer visualizer(bundle.image.width() * scale_factor, bundle.image.height() * scale_factor);
       visualizer.SetMVPMode(OffscreenMeshVisualizer::CamPerspective);
       visualizer.SetRenderMode(OffscreenMeshVisualizer::Mesh);
       visualizer.BindMesh(mesh);

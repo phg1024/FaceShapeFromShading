@@ -133,14 +133,47 @@ int main(int argc, char **argv) {
 
   const int tex_size = 2048;
 
+  // HACK: subdivie the template mesh so it has the same topology as the input
+  // blendshapes
+  // Subdivide the mesh twice
+  const int max_subdivisions = 1;
+  for(int i=0;i<max_subdivisions;++i) {
+    mesh.BuildHalfEdgeMesh();
+    cout << "Subdivision #" << i << endl;
+    mesh.Subdivide();
+    cout << "#faces = " << mesh.NumFaces() << endl;
+  }
+
+  // HACK: each valid face i becomes [4i, 4i+1, 4i+2, 4i+3] after the each
+  // subdivision. See BasicMesh::Subdivide for details
+  for(int i=0;i<max_subdivisions;++i) {
+    vector<int> valid_faces_indices_new;
+    for(auto fidx : valid_faces_indices) {
+      int fidx_base = fidx*4;
+      valid_faces_indices_new.push_back(fidx_base);
+      valid_faces_indices_new.push_back(fidx_base+1);
+      valid_faces_indices_new.push_back(fidx_base+2);
+      valid_faces_indices_new.push_back(fidx_base+3);
+    }
+    valid_faces_indices = valid_faces_indices_new;
+  }
+
   // Generate index map for albedo
-  QImage albedo_index_map = GetIndexMap(albedo_index_map_filename, mesh);
+  const bool gen_albedo_index_map = true;
+  QImage albedo_index_map = GetIndexMap(albedo_index_map_filename,
+                                        mesh,
+                                        gen_albedo_index_map,
+                                        tex_size);
 
   // Compute the barycentric coordinates for each pixel
+  const bool gen_albedo_pixel_map = true;
   vector<vector<PixelInfo>> albedo_pixel_map;
   QImage pixel_map_image;
   tie(pixel_map_image, albedo_pixel_map) = GetPixelCoordinatesMap(albedo_pixel_map_filename,
-                                                                  albedo_index_map, mesh);
+                                                                  albedo_index_map,
+                                                                  mesh,
+                                                                  gen_albedo_pixel_map,
+                                                                  tex_size);
 
   const string settings_filename = vm["settings_file"].as<string>();
   int iteration_index = vm["iter"].as<int>();
@@ -203,7 +236,7 @@ int main(int argc, char **argv) {
 
   tie(mean_texture_image, face_indices_maps) = GenerateMeanTexture(
     image_bundles,
-    model,
+    model,  // it is not used when use_blendshapes = true
     blendshapes,
     mesh,
     tex_size,
