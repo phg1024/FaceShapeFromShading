@@ -130,7 +130,10 @@ int main(int argc, char **argv) {
 
     auto image_points_pair = LoadImageAndPoints(image_filename.string(), pts_filename.string(), false);
     auto recon_results = LoadReconstructionResult(res_filename.string());
-    image_bundles.push_back(ImageBundle(image_points_pair.first, image_points_pair.second, recon_results));
+    image_bundles.push_back(ImageBundle(p.first,
+                                        image_points_pair.first,
+                                        image_points_pair.second,
+                                        recon_results));
   }
   cout << "Image bundles loaded." << endl;
 
@@ -194,6 +197,8 @@ int main(int argc, char **argv) {
     // generate reference normal map and depth map
     for(int i=0;i<num_images;++i) {
       auto& bundle = image_bundles[i];
+      int image_index = get_image_index(bundle.filename);
+
       // get the geometry of the mesh, update normal
       model.ApplyWeights(bundle.params.params_model.Wid, bundle.params.params_model.Wexp);
       mesh.UpdateVertices(model.GetTM());
@@ -286,12 +291,12 @@ int main(int argc, char **argv) {
         }
       }
 
-      img.save( (results_path / fs::path("normal" + std::to_string(i) + ".png")).string().c_str() );
-      depth_img.save( (results_path / fs::path("depth" + std::to_string(i) + ".png")).string().c_str() );
+      img.save( (results_path / fs::path("normal" + std::to_string(image_index) + ".png")).string().c_str() );
+      depth_img.save( (results_path / fs::path("depth" + std::to_string(image_index) + ".png")).string().c_str() );
 
       // Write out the entire depth map
       {
-        ofstream fout( (results_path / fs::path("depth_map" + std::to_string(i) + ".bin")).string(), ios::binary );
+        ofstream fout( (results_path / fs::path("depth_map" + std::to_string(image_index) + ".bin")).string(), ios::binary );
         int depth_map_size[] = {img.height(), img.width()};
         fout.write(reinterpret_cast<char*>(depth_map_size), sizeof(int)*2);
         fout.write(reinterpret_cast<char*>(output_depth_map.data()), sizeof(double)*img.height()*img.width()*3);
@@ -300,7 +305,7 @@ int main(int argc, char **argv) {
 
       // Write out the depth map as a per-pixel mesh
       {
-        ofstream fout((results_path / fs::path("depth_mesh" + std::to_string(i) + ".obj")).string());
+        ofstream fout((results_path / fs::path("depth_mesh" + std::to_string(image_index) + ".obj")).string());
 
         vector<int> depth_node_map(img.width()*img.height(), 0);
         for(int j=0;j<point_cloud_with_id.size();++j) {
@@ -332,7 +337,7 @@ int main(int argc, char **argv) {
 
       // Write out the initial point cloud
       {
-        ofstream fout( (results_path / fs::path("point_cloud" + std::to_string(i) + ".txt")).string() );
+        ofstream fout( (results_path / fs::path("point_cloud" + std::to_string(image_index) + ".txt")).string() );
         for(auto p : point_cloud) {
           fout << p.x << ' ' << p.y << ' ' << p.z << endl;
         }
@@ -346,6 +351,8 @@ int main(int argc, char **argv) {
     for(int i=0;i<num_images;++i) {
       // copy to mean texture to albedos
       auto& bundle = image_bundles[i];
+
+      const int image_index = get_image_index(bundle.filename);
 
       // get the geometry of the mesh, update normal
       model.ApplyWeights(bundle.params.params_model.Wid, bundle.params.params_model.Wexp);
@@ -379,13 +386,13 @@ int main(int argc, char **argv) {
         }
       }
 
-      albedo_image.save( (results_path / fs::path("albedo" + std::to_string(i) + ".png")).string().c_str() );
+      albedo_image.save( (results_path / fs::path("albedo" + std::to_string(image_index) + ".png")).string().c_str() );
 
       // color transfer from bundle.image to albedo_image, so the initial albedo
       // is a better match
       albedo_image = TransferColor(albedo_image, bundle.image, valie_pixels_map[i], valie_pixels_map[i]);
 
-      albedo_image.save( (results_path / fs::path("albedo_transferred_" + std::to_string(i) + ".png")).string().c_str() );
+      albedo_image.save( (results_path / fs::path("albedo_transferred_" + std::to_string(image_index) + ".png")).string().c_str() );
 
       //#pragma omp parallel for
       for(int y=0;y<albedo_image.height();++y) {
@@ -403,6 +410,8 @@ int main(int argc, char **argv) {
     }
 
     if (bool(global_settings["preparation_only"])) {
+      // We don't really compute shape from shading results here, just prepare
+      // necessary data
       return 0;
     }
 

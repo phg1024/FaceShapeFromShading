@@ -157,6 +157,10 @@ inline glm::dvec3 jet_color(double ratio) {
   return glm::dvec3(r*255, g*255, b*255);
 }
 
+inline int get_image_index(const string& filename) {
+  return std::stoi(filename.substr(0, filename.size()-4));
+}
+
 inline pair<set<int>, vector<int>> FindTrianglesIndices(const QImage& img) {
   int w = img.width(), h = img.height();
   set<int> S;
@@ -414,6 +418,7 @@ inline pair<QImage, vector<vector<PixelInfo>>> GetPixelCoordinatesMap(
         albedo_pixel_map[i][j] = PixelInfo(fidx, glm::vec3(x, y, z));
       }
     }
+    //pixel_map_image.save("albedo_pixel.png");
     PhGUtils::message("done.");
   } else {
     /// @FIXME antialiasing issue because of round-off error
@@ -666,7 +671,9 @@ inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
             pix_color.getHsvF(&pix_hsv.r, &pix_hsv.g, &pix_hsv.b);
             double d_ij = glm::distance2(pix_hsv, mean_hsv);
             if(d_ij < distance_threshold) {
-              mean_texture_refined_mat.at<cv::Vec3d>(i, j) = mean_color_vec * 0.75 + mean_texture_refined_mat.at<cv::Vec3d>(i, j) * 0.25;
+              // Change this ratio to control how much details to include in the albedo
+              const double mix_ratio = 0.75;
+              mean_texture_refined_mat.at<cv::Vec3d>(i, j) = mean_color_vec * mix_ratio + mean_texture_refined_mat.at<cv::Vec3d>(i, j) * (1-mix_ratio);
             }
           }
         }

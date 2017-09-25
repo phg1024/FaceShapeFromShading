@@ -93,6 +93,10 @@ find_package(Ceres REQUIRED)
 include_directories(${CERES_INCLUDE_DIRS})
 link_libraries(${CERES_LIBRARIES})
 
+# embree
+include_directories("/usr/local/include")
+link_libraries("/usr/local/lib/libembree.so.2.13.0")
+
 # Face shape from shading program
 add_executable(FaceShapeFromShading faceshapefromshading.cpp common.h MultilinearReconstruction/OffscreenMeshVisualizer.cpp MultilinearReconstruction/OffscreenMeshVisualizer.h utils.h)
 target_link_libraries(FaceShapeFromShading
@@ -118,10 +122,44 @@ target_link_libraries(FaceShapeFromShading_exp
                       Qt5::OpenGL
                       ${MKLLIBS}
                       ${PhGLib})
+
+add_executable(refine_mesh_with_normal refine_mesh_with_normal.cpp common.h MultilinearReconstruction/OffscreenMeshVisualizer.cpp MultilinearReconstruction/OffscreenMeshVisualizer.h)
+target_link_libraries(refine_mesh_with_normal
+                      multilinearmodel
+                      basicmesh
+                      tensor
+                      ioutilities
+                      Qt5::Core
+                      Qt5::Widgets
+                      Qt5::OpenGL
+                      ${MKLLIBS}
+                      ${PhGLib})
+
+add_executable(refine_mesh_with_normal_exp refine_mesh_with_normal_exp.cpp common.h MultilinearReconstruction/OffscreenMeshVisualizer.cpp MultilinearReconstruction/OffscreenMeshVisualizer.h)
+target_link_libraries(refine_mesh_with_normal_exp
+                      multilinearmodel
+                      basicmesh
+                      tensor
+                      ioutilities
+                      Qt5::Core
+                      Qt5::Widgets
+                      Qt5::OpenGL
+                      ${MKLLIBS}
+                      ${PhGLib})
 add_executable(ptrender ptrender.cpp)
 
 add_executable(explicit explicit.cpp)
 target_link_libraries(explicit CGAL basicmesh ioutilities ${PhGLib})
+
+add_executable(ambient_occlusion ambient_occlusion.cpp)
+target_link_libraries(ambient_occlusion
+                      basicmesh
+                      offscreenmeshvisualizer
+                      ioutilities
+                      Qt5::Core
+                      Qt5::Widgets
+                      Qt5::OpenGL
+                      ${PhGLib})
 
 link_directories(MultilinearReconstruction)
 

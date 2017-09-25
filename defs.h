@@ -11,8 +11,12 @@ struct PixelInfo {
 
 struct ImageBundle {
   ImageBundle() {}
-  ImageBundle(const QImage& image, const vector<Constraint2D>& points, const ReconstructionResult& params)
-    : image(image), points(points), params(params) {}
+  ImageBundle(const string& filename,
+              const QImage& image,
+              const vector<Constraint2D>& points,
+              const ReconstructionResult& params)
+    : filename(filename), image(image), points(points), params(params) {}
+  string filename;
   QImage image;
   vector<Constraint2D> points;
   ReconstructionResult params;

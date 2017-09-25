@@ -326,6 +326,7 @@ Vec radiance(const Ray &r, int depth, unsigned short *Xi, path_info& info){
         Vec x=r.o+r.d*(mesh_t - 1e-3);
         double p = f.x>f.y && f.x>f.z ? f.x : f.y>f.z ? f.y : f.z; // max refl
         if (++depth>5) {
+          // maximum depth is 5
           if (erand48(Xi)<p) f=f*(1/p);
           else {
             info.valid = false;
@@ -462,7 +463,7 @@ int main(int argc, char *argv[]){
           c[i] = c[i] + Vec(clamp(r.x),clamp(r.y),clamp(r.z))*.25;
         }
   }
-  FILE *f = fopen("image.ppm", "w");         // Write image to PPM file.
+  FILE *f = fopen(argv[4], "w");         // Write image to PPM file.
   fprintf(f, "P3\n%d %d\n%d\n", w, h, 255);
   for (int i=0; i<w*h; i++)
     fprintf(f,"%d %d %d ", toInt(c[i].x), toInt(c[i].y), toInt(c[i].z));
