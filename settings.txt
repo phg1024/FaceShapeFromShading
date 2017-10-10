@@ -25,5 +25,11 @@
       "max_iters": 10,
       "init_tr_radius": 0.01
     }
+  },
+  "mean_texture_options": {
+    "generate_mean_texture": true,
+    "refine_method": "hsv",
+    "hsv_threshold": 0.2,
+    "mix_ratio": 0.95
   }
 }

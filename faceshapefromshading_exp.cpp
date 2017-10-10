@@ -228,14 +228,8 @@ int main(int argc, char **argv) {
   // Collect texture information from each input (image, mesh) pair to obtain mean texture
   QImage mean_texture_image;
   vector<vector<int>> face_indices_maps;
-  json mean_texture_options = R"(
-    {
-      "generate_mean_texture": true,
-      "refine_method": "hsv",
-      "hsv_threshold": 0.1,
-      "use_blendshapes": true
-    }
-  )"_json;
+  json mean_texture_options = global_settings["mean_texture_options"];
+  mean_texture_options["use_blendshapes"] = true;
   mean_texture_options["core_face_region_filename"] = core_face_region_filename;
 
   tie(mean_texture_image, face_indices_maps) = GenerateMeanTexture(

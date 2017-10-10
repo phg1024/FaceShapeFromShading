@@ -672,7 +672,7 @@ inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
             double d_ij = glm::distance2(pix_hsv, mean_hsv);
             if(d_ij < distance_threshold) {
               // Change this ratio to control how much details to include in the albedo
-              const double mix_ratio = 0.75;
+              const double mix_ratio = settings["mix_ratio"];
               mean_texture_refined_mat.at<cv::Vec3d>(i, j) = mean_color_vec * mix_ratio + mean_texture_refined_mat.at<cv::Vec3d>(i, j) * (1-mix_ratio);
             }
           }
