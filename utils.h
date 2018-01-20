@@ -599,23 +599,43 @@ inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
     if(generate_mean_texture) {
       mean_texture_image = QImage(tex_size, tex_size, QImage::Format_ARGB32);
       mean_texture_image.fill(0);
-      for(int i=0;i<tex_size;++i) {
-        for (int j = 0; j < (tex_size/2); ++j) {
-          double weight_ij = mean_texture_weight[i][j];
-          double weight_ij_s = mean_texture_weight[i][tex_size-1-j];
+      bool symmetric_texture = settings["symmetric_texture"];
 
-          if(weight_ij == 0 && weight_ij_s == 0) {
-            mean_texture_mat.at<cv::Vec3d>(i, j) = cv::Vec3d(0, 0, 0);
-            continue;
-          } else {
-            glm::dvec3 texel = (mean_texture[i][j] + mean_texture[i][tex_size-1-j]) / (weight_ij + weight_ij_s);
-            mean_texture[i][j] = texel;
-            mean_texture[i][tex_size-1-j] = texel;
-            mean_texture_image.setPixel(j, i, qRgb(texel.r, texel.g, texel.b));
-            mean_texture_image.setPixel(tex_size-1-j, i, qRgb(texel.r, texel.g, texel.b));
+      if(symmetric_texture) {
+        for(int i=0;i<tex_size;++i) {
+          for (int j = 0; j < (tex_size/2); ++j) {
+            double weight_ij = mean_texture_weight[i][j];
+            double weight_ij_s = mean_texture_weight[i][tex_size-1-j];
 
-            mean_texture_mat.at<cv::Vec3d>(i, j) = cv::Vec3d(texel.x, texel.y, texel.z);
-            mean_texture_mat.at<cv::Vec3d>(i, tex_size-1-j) = cv::Vec3d(texel.x, texel.y, texel.z);
+            if(weight_ij == 0 && weight_ij_s == 0) {
+              mean_texture_mat.at<cv::Vec3d>(i, j) = cv::Vec3d(0, 0, 0);
+              continue;
+            } else {
+              glm::dvec3 texel = (mean_texture[i][j] + mean_texture[i][tex_size-1-j]) / (weight_ij + weight_ij_s);
+              mean_texture[i][j] = texel;
+              mean_texture[i][tex_size-1-j] = texel;
+              mean_texture_image.setPixel(j, i, qRgb(texel.r, texel.g, texel.b));
+              mean_texture_image.setPixel(tex_size-1-j, i, qRgb(texel.r, texel.g, texel.b));
+
+              mean_texture_mat.at<cv::Vec3d>(i, j) = cv::Vec3d(texel.x, texel.y, texel.z);
+              mean_texture_mat.at<cv::Vec3d>(i, tex_size-1-j) = cv::Vec3d(texel.x, texel.y, texel.z);
+            }
+          }
+        }
+      } else {
+        for(int i=0;i<tex_size;++i) {
+          for (int j = 0; j < tex_size; ++j) {
+            double weight_ij = mean_texture_weight[i][j];
+
+            if(weight_ij == 0) {
+              mean_texture_mat.at<cv::Vec3d>(i, j) = cv::Vec3d(0, 0, 0);
+              continue;
+            } else {
+              glm::dvec3 texel = mean_texture[i][j] / weight_ij;
+              mean_texture[i][j] = texel;
+              mean_texture_image.setPixel(j, i, qRgb(texel.r, texel.g, texel.b));
+              mean_texture_mat.at<cv::Vec3d>(i, j) = cv::Vec3d(texel.x, texel.y, texel.z);
+            }
           }
         }
       }
@@ -669,6 +689,7 @@ inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
             QColor pix_color = QColor::fromRgb(pix[0], pix[1], pix[2]);
             glm::dvec3 pix_hsv;
             pix_color.getHsvF(&pix_hsv.r, &pix_hsv.g, &pix_hsv.b);
+            //double d_ij = fabs(pix_hsv.r - mean_hsv.r);
             double d_ij = glm::distance2(pix_hsv, mean_hsv);
             if(d_ij < distance_threshold) {
               // Change this ratio to control how much details to include in the albedo

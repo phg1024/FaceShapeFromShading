@@ -29,7 +29,7 @@
   "mean_texture_options": {
     "generate_mean_texture": true,
     "refine_method": "hsv",
-    "hsv_threshold": 0.2,
-    "mix_ratio": 0.95
+    "hsv_threshold": 0.10,
+    "mix_ratio": 0.85
   }
 }

@@ -231,6 +231,7 @@ int main(int argc, char **argv) {
   json mean_texture_options = global_settings["mean_texture_options"];
   mean_texture_options["use_blendshapes"] = true;
   mean_texture_options["core_face_region_filename"] = core_face_region_filename;
+  mean_texture_options["symmetric_texture"] = true;
 
   tie(mean_texture_image, face_indices_maps) = GenerateMeanTexture(
     image_bundles,
