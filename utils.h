@@ -121,14 +121,31 @@ inline glm::dvec3 bilinear_sample(const QImage& img, double x, double y) {
   double c0 = x - x0, c0c = 1 - c0;
   double c1 = y - y0, c1c = 1 - c1;
 
-  QRgb p00 = img.pixel(x0, y0);
-  QRgb p01 = img.pixel(x1, y0);
-  QRgb p10 = img.pixel(x0, y1);
-  QRgb p11 = img.pixel(x1, y1);
+  QRgb pix = img.pixel(x0, y0);
+  return glm::dvec3(qRed(pix), qGreen(pix), qBlue(pix));
 
-  double r = c0c * c1c * qRed(p00) + c0c * c1 * qRed(p01) + c0 * c1c * qRed(p10) + c0 * c1 * qRed(p11);
-  double g = c0c * c1c * qGreen(p00) + c0c * c1 * qGreen(p01) + c0 * c1c * qGreen(p10) + c0 * c1 * qGreen(p11);
-  double b = c0c * c1c * qBlue(p00) + c0c * c1 * qBlue(p01) + c0 * c1c * qBlue(p10) + c0 * c1 * qBlue(p11);
+  /*
+
+     p00 ------ p01
+      |___| c1c  |
+      |c0c       |
+      |          |
+     p10 ------ p11
+
+  */
+
+  QRgb p00 = img.pixel(x0, y0); double f00 = c0c * c1c;
+  QRgb p01 = img.pixel(x1, y0); double f01 = c0c * c1;
+  QRgb p10 = img.pixel(x0, y1); double f10 = c0 * c1c;
+  QRgb p11 = img.pixel(x1, y1); double f11 = c0 * c1;
+
+  auto interpolate_channel = [&](QRgb tl, QRgb tr, QRgb bl, QRgb br, std::function<int(QRgb)> extractor) -> double {
+    return f00 * extractor(tl) + f01 * extractor(tr) + f10 * extractor(bl) + f11 * extractor(br);
+  };
+
+  double r = interpolate_channel(p00, p01, p10, p11, [](QRgb pix) { return qRed(pix); });
+  double g = interpolate_channel(p00, p01, p10, p11, [](QRgb pix) { return qGreen(pix); });
+  double b = interpolate_channel(p00, p01, p10, p11, [](QRgb pix) { return qBlue(pix); });
 
   return glm::dvec3(r, g, b);
 }
@@ -387,7 +404,7 @@ inline pair<QImage, vector<vector<PixelInfo>>> GetPixelCoordinatesMap(
   const string& albedo_pixel_map_filename,
   const QImage& albedo_index_map,
   const BasicMesh& mesh,
-  bool gen_pixel_map = false,
+  bool gen_pixel_map = true,
   int tex_size = 2048) {
 
   vector<vector<PixelInfo>> albedo_pixel_map(tex_size, vector<PixelInfo>(tex_size));
@@ -503,8 +520,8 @@ inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
 
     // use a larger scale when generating mean texture with blendshapes
     // since blendshapes are subdivided meshes and each triangle is much smaller
-    double scale_factor = 1.0;
-    if(use_blendshapes) scale_factor = 2.0;
+    double scale_factor = 6.0;
+    if(use_blendshapes) scale_factor = 8.0;
 
     for(auto& bundle : image_bundles) {
       // get the geometry of the mesh, update normal
@@ -545,25 +562,99 @@ inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
 
       // for each visible triangle, compute the coordinates of its 3 corners
       QImage img_vertices = img;
-      vector<vector<glm::dvec3>> triangles_projected;
+      map<int, vector<glm::dvec3>> triangles_projected;
+      vector<cv::Mat> transforms(mesh.NumFaces());
       for(auto tidx : triangles) {
         auto face_i = mesh.face(tidx);
         auto v0_mesh = mesh.vertex(face_i[0]);
         auto v1_mesh = mesh.vertex(face_i[1]);
         auto v2_mesh = mesh.vertex(face_i[2]);
-        glm::dvec3 v0_tri = ProjectPoint(glm::dvec3(v0_mesh[0], v0_mesh[1], v0_mesh[2]), Mview, bundle.params.params_cam);
-        glm::dvec3 v1_tri = ProjectPoint(glm::dvec3(v1_mesh[0], v1_mesh[1], v1_mesh[2]), Mview, bundle.params.params_cam);
-        glm::dvec3 v2_tri = ProjectPoint(glm::dvec3(v2_mesh[0], v2_mesh[1], v2_mesh[2]), Mview, bundle.params.params_cam);
-        triangles_projected.push_back(vector<glm::dvec3>{v0_tri, v1_tri, v2_tri});
-
+        glm::dvec3 v0_tri = ProjectPoint(glm::dvec3(v0_mesh[0], v0_mesh[1], v0_mesh[2]), Mview, bundle.params.params_cam) * scale_factor;
+        glm::dvec3 v1_tri = ProjectPoint(glm::dvec3(v1_mesh[0], v1_mesh[1], v1_mesh[2]), Mview, bundle.params.params_cam) * scale_factor;
+        glm::dvec3 v2_tri = ProjectPoint(glm::dvec3(v2_mesh[0], v2_mesh[1], v2_mesh[2]), Mview, bundle.params.params_cam) * scale_factor;
+        triangles_projected[tidx] = vector<glm::dvec3>{v0_tri, v1_tri, v2_tri};
 
         img_vertices.setPixel(v0_tri.x, img.height()-1-v0_tri.y, qRgb(255, 255, 255));
         img_vertices.setPixel(v1_tri.x, img.height()-1-v1_tri.y, qRgb(255, 255, 255));
         img_vertices.setPixel(v2_tri.x, img.height()-1-v2_tri.y, qRgb(255, 255, 255));
+
+        // TODO Warp this triangle into the destination
+        // auto tex_coords_i = mesh.face_texture(tidx);
+        // cv::Point2f dst_points[3] = {
+        //   cv::Point2f(v0_tri.x, img.height()-1-v0_tri.y),
+        //   cv::Point2f(v1_tri.x, img.height()-1-v1_tri.y),
+        //   cv::Point2f(v2_tri.x, img.height()-1-v2_tri.y),
+        // };
+        // cv::Point2f src_points[3] = {
+        //   cv::Point2f(mesh.texture_coords(tex_coords_i[0])[0],  1 - mesh.texture_coords(tex_coords_i[0])[1]) * tex_size,
+        //   cv::Point2f(mesh.texture_coords(tex_coords_i[1])[0],  1 - mesh.texture_coords(tex_coords_i[1])[1]) * tex_size,
+        //   cv::Point2f(mesh.texture_coords(tex_coords_i[2])[0],  1 - mesh.texture_coords(tex_coords_i[2])[1]) * tex_size
+        // };
+        // cv::Mat transform_i = cv::getAffineTransform(src_points, dst_points);
+        // transforms[tidx] = transform_i;
       }
       img_vertices.save("mesh_with_vertices.png");
 
+      // QImage tex_img_warped(tex_size, tex_size, QImage::Format_ARGB32);
+      // tex_img_warped.fill(0);
+      // for(int i=0;i<tex_size;++i) {
+      //   for(int j=0;j<tex_size;++j) {
+      //     PixelInfo pix_ij = albedo_pixel_map[i][j];
+      //
+      //     // skip if the triangle is not visible
+      //     if(triangles.find(pix_ij.fidx) == triangles.end()) continue;
+      //
+      //     // for this texel, use affine map to find the corresponding pixel
+      //     cv::Point2f dst_pt = transforms[pix_ij.fidx] * cv::Point3f(j, i, 1);
+      //     glm::dvec3 texel = bilinear_sample(bundle.image, dst_pt.x/scale_factor, dst_pt.y/scale_factor);
+      //     tex_img_warped.setPixel(j, i, qRgb(texel.x*255, texel.y*255, texel.z*255));
+      //   }
+      // }
+      // tex_img_warped.save("tex_warped.png");
+
+      // for each pixel in img, compute bcoords and visualize it
+      QImage img_bcoords = img;
+      for(int i=0;i<img.height();++i) {
+        for(int j=0;j<img.width();++j) {
+          int pidx = i * img.width() + j;
+          int fidx = triangles_indices_pair.second[pidx];
+          if(fidx < 0 || fidx >= mesh.NumFaces()) continue;
+
+          // auto face_i = mesh.face(fidx);
+          // auto v0_mesh = mesh.vertex(face_i[0]);
+          // auto v1_mesh = mesh.vertex(face_i[1]);
+          // auto v2_mesh = mesh.vertex(face_i[2]);
+          // glm::dvec3 v0_tri = ProjectPoint(glm::dvec3(v0_mesh[0], v0_mesh[1], v0_mesh[2]), Mview, bundle.params.params_cam) * scale_factor;
+          // glm::dvec3 v1_tri = ProjectPoint(glm::dvec3(v1_mesh[0], v1_mesh[1], v1_mesh[2]), Mview, bundle.params.params_cam) * scale_factor;
+          // glm::dvec3 v2_tri = ProjectPoint(glm::dvec3(v2_mesh[0], v2_mesh[1], v2_mesh[2]), Mview, bundle.params.params_cam) * scale_factor;
+          // triangles_projected.push_back(vector<glm::dvec3>{v0_tri, v1_tri, v2_tri});
+
+          glm::dvec3 v0_tri, v1_tri, v2_tri;
+          auto tri_verts_2d = triangles_projected.at(fidx);
+          v0_tri = tri_verts_2d[0];
+          v1_tri = tri_verts_2d[1];
+          v2_tri = tri_verts_2d[2];
+
+          using PhGUtils::Point3f;
+          using PhGUtils::Point2d;
+          Point3f bcoords;
+          // Compute barycentric coordinates
+          PhGUtils::computeBarycentricCoordinates(Point2d(j+0.5, i+0.5),
+                                                  Point2d(v0_tri.x, img.height()-1-v0_tri.y),
+                                                  Point2d(v1_tri.x, img.height()-1-v1_tri.y),
+                                                  Point2d(v2_tri.x, img.height()-1-v2_tri.y),
+                                                  bcoords);
+          // Color the pixel
+          img_bcoords.setPixel(j, i, qRgb(bcoords.x*255, bcoords.y*255, bcoords.z*255));
+        }
+      }
+      img_bcoords.save("mesh_with_bcoords.png");
+
       if(generate_mean_texture) {
+        // populate the current texture map
+        QImage tex_img_i(tex_size, tex_size, QImage::Format_ARGB32);
+        tex_img_i.fill(0);
+
         // for each pixel in the texture map, use backward projection to obtain pixel value in the input image
         // accumulate the texels in average texel map
         for(int i=0;i<tex_size;++i) {
@@ -573,25 +664,38 @@ inline tuple<QImage, vector<vector<int>>> GenerateMeanTexture(
             // skip if the triangle is not visible
             if(triangles.find(pix_ij.fidx) == triangles.end()) continue;
 
-            auto face_i = mesh.face(pix_ij.fidx);
+            // auto face_i = mesh.face(pix_ij.fidx);
+            //
+            // auto v0_mesh = mesh.vertex(face_i[0]);
+            // auto v1_mesh = mesh.vertex(face_i[1]);
+            // auto v2_mesh = mesh.vertex(face_i[2]);
+            //
+            // auto v = v0_mesh * pix_ij.bcoords.x + v1_mesh * pix_ij.bcoords.y + v2_mesh * pix_ij.bcoords.z;
+            //
+            // glm::dvec3 v_img = ProjectPoint(glm::dvec3(v[0], v[1], v[2]), Mview, bundle.params.params_cam);
 
-            auto v0_mesh = mesh.vertex(face_i[0]);
-            auto v1_mesh = mesh.vertex(face_i[1]);
-            auto v2_mesh = mesh.vertex(face_i[2]);
-
-            auto v = v0_mesh * pix_ij.bcoords.x + v1_mesh * pix_ij.bcoords.y + v2_mesh * pix_ij.bcoords.z;
-
-            glm::dvec3 v_img = ProjectPoint(glm::dvec3(v[0], v[1], v[2]), Mview, bundle.params.params_cam);
+            // use the projected triangles directly
+            glm::dvec3 v0_tri, v1_tri, v2_tri;
+            auto tri_verts_2d = triangles_projected.at(pix_ij.fidx);
+            v0_tri = tri_verts_2d[0];
+            v1_tri = tri_verts_2d[1];
+            v2_tri = tri_verts_2d[2];
+            glm::dvec3 v_img = v0_tri * (double)pix_ij.bcoords.x + v1_tri * (double)pix_ij.bcoords.y + v2_tri * (double)pix_ij.bcoords.z;
+            v_img = v_img / (double)scale_factor;
 
             // take the pixel from the input image through bilinear sampling
             glm::dvec3 texel = bilinear_sample(bundle.image, v_img.x, bundle.image.height()-1-v_img.y);
 
             if(texel.r < 0 && texel.g < 0 && texel.b < 0) continue;
 
+            tex_img_i.setPixel(j, i, qRgb(texel.r, texel.g, texel.b));
+
             mean_texture[i][j] += texel;
             mean_texture_weight[i][j] += 1.0;
           }
         }
+
+        tex_img_i.save( (results_path / fs::path(fs::path(bundle.filename.c_str()).stem().string() + "_tex.png")).string().c_str() );
       }
     }
 
