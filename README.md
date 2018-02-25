@@ -20,7 +20,7 @@ Yet another implementation of shape from shading for human face.
 
 ## Compile
 ```bash
-git clone https://github.com/phg1024/FaceShapeFromShading.git
+git clone --recursive https://github.com/phg1024/FaceShapeFromShading.git
 cd FaceShapeFromShading
 mkdir build
 cd build
