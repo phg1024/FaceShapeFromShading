@@ -29,7 +29,12 @@
   "mean_texture_options": {
     "generate_mean_texture": true,
     "refine_method": "hsv",
-    "hsv_threshold": 0.10,
-    "mix_ratio": 0.85
+    "hsv_threshold": 0.95,
+    "mix_ratio": 0.95,
+    "hsv_thresholds": {
+      "FW": 0.95,
+      "regular": 0.15,
+      "comments": "Choose either 0.35 or 0.15 based on the experiment to run"
+    }
   }
 }
