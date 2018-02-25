@@ -63,6 +63,11 @@ find_package(Qt5Core)
 find_package(Qt5Widgets)
 find_package(Qt5OpenGL)
 
+# json
+message(STATUS "Found json cpp")
+message(STATUS "${CMAKE_CURRENT_LIST_DIR}/../json/include")
+include_directories("${CMAKE_CURRENT_LIST_DIR}/../json/include")
+
 # Ceres solver
 #find_package(Ceres REQUIRED)
 #include_directories(${CERES_INCLUDE_DIRS})

@@ -27,7 +27,7 @@
 
 namespace fs = boost::filesystem;
 
-#include "json/src/json.hpp"
+#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 
 template <typename T>

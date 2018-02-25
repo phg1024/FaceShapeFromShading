@@ -8,6 +8,7 @@
 #include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
 #include <QOffscreenSurface>
+#include <QDir>
 #include <QFile>
 
 #include <GL/freeglut_std.h>
@@ -34,7 +35,7 @@
 namespace fs = boost::filesystem;
 namespace po = boost::program_options;
 
-#include "json/src/json.hpp"
+#include "nlohmann/json.hpp"
 using json = nlohmann::json;
 
 #include "cost_functions.h"
@@ -76,34 +77,37 @@ int main(int argc, char **argv) {
 
   //google::InitGoogleLogging(argv[0]);
 
+  const string home_directory = QDir::homePath().toStdString();
+  cout << "Home dir: " << home_directory << endl;
+
   // load the settings file
   PhGUtils::message("Loading global settings ...");
-  json global_settings = json::parse(ifstream("/home/phg/Codes/FaceShapeFromShading/settings.txt"));
+  json global_settings = json::parse(ifstream(home_directory + "/Codes/FaceShapeFromShading/settings.txt"));
   PhGUtils::message("done.");
   cout << setw(2) << global_settings << endl;
 
   // Multilinear model related files
-  const string model_filename("/home/phg/Data/Multilinear/blendshape_core.tensor");
-  const string id_prior_filename("/home/phg/Data/Multilinear/blendshape_u_0_aug.tensor");
-  const string exp_prior_filename("/home/phg/Data/Multilinear/blendshape_u_1_aug.tensor");
+  const string model_filename(home_directory + "/Data/Multilinear/blendshape_core.tensor");
+  const string id_prior_filename(home_directory + "/Data/Multilinear/blendshape_u_0_aug.tensor");
+  const string exp_prior_filename(home_directory + "/Data/Multilinear/blendshape_u_1_aug.tensor");
 
-  const string template_mesh_filename("/home/phg/Data/Multilinear/template.obj");
-  const string contour_points_filename("/home/phg/Data/Multilinear/contourpoints.txt");
-  const string landmarks_filename("/home/phg/Data/Multilinear/landmarks_73.txt");
+  const string template_mesh_filename(home_directory + "/Data/Multilinear/template.obj");
+  const string contour_points_filename(home_directory + "/Data/Multilinear/contourpoints.txt");
+  const string landmarks_filename(home_directory + "/Data/Multilinear/landmarks_73.txt");
 
   // The following files are related to the base template, i.e. the one before subdivision.
   // TODO Need to create a set of index map and pixel map for different level of subdivisions.
   // Maybe in the form of face indices mapping
-  const string albedo_index_map_filename("/home/phg/Data/Multilinear/albedo_index.png");
-  const string albedo_pixel_map_filename("/home/phg/Data/Multilinear/albedo_pixel.png");
+  const string albedo_index_map_filename(home_directory + "/Data/Multilinear/albedo_index.png");
+  const string albedo_pixel_map_filename(home_directory + "/Data/Multilinear/albedo_pixel.png");
 
-  const string mean_albedo_filename("/home/phg/Data/Texture/mean_texture.png");
+  const string mean_albedo_filename(home_directory + "/Data/Texture/mean_texture.png");
 
-  const string core_face_region_filename("/home/phg/Data/Multilinear/albedos/core_face.png");
+  const string core_face_region_filename(home_directory + "/Data/Multilinear/albedos/core_face.png");
 
-  const string valid_faces_indices_filename("/home/phg/Data/Multilinear/face_region_indices.txt");
-  const string face_boundary_indices_filename("/home/phg/Data/Multilinear/face_boundary_indices.txt");
-  const string hair_region_filename("/home/phg/Data/Multilinear/hair_region_indices.txt");
+  const string valid_faces_indices_filename(home_directory + "/Data/Multilinear/face_region_indices.txt");
+  const string face_boundary_indices_filename(home_directory + "/Data/Multilinear/face_boundary_indices.txt");
+  const string hair_region_filename(home_directory + "/Data/Multilinear/hair_region_indices.txt");
 
   BasicMesh mesh(template_mesh_filename);
   auto landmarks = LoadIndices(landmarks_filename);

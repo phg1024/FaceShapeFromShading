@@ -97,6 +97,11 @@ link_libraries(${CERES_LIBRARIES})
 include_directories("/usr/local/include")
 link_libraries("/usr/local/lib/libembree.so.2.13.0")
 
+# json
+message(STATUS "Found json cpp")
+message(STATUS "${CMAKE_CURRENT_LIST_DIR}/json/include")
+include_directories("${CMAKE_CURRENT_LIST_DIR}/json/include")
+
 # Face shape from shading program
 add_executable(FaceShapeFromShading faceshapefromshading.cpp common.h MultilinearReconstruction/OffscreenMeshVisualizer.cpp MultilinearReconstruction/OffscreenMeshVisualizer.h utils.h)
 target_link_libraries(FaceShapeFromShading
